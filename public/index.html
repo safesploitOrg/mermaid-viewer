@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Mermaid Viewer</title>
+  <link rel="stylesheet" href="./assets/css/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">🧜 Mermaid Viewer</div>
+    <div class="badge">4 layouts · ELK default</div>
+
+    <label>
+      Mermaid
+      <input
+        id="version"
+        type="text"
+        value="11.15.0"
+        spellcheck="false"
+        aria-label="Mermaid version"
+      >
+    </label>
+
+    <label>
+      Theme
+      <select id="theme" aria-label="Theme">
+        <option value="light">GitHub light</option>
+        <option value="dark">GitHub dark</option>
+      </select>
+    </label>
+
+    <label title="Compare Mermaid's supported layout algorithms using the same source.">
+      Layout
+      <select id="layout" aria-label="Layout engine">
+        <option value="elk" selected>ELK — layered / orthogonal</option>
+        <option value="tidy-tree">Tidy Tree — hierarchical</option>
+        <option value="cose-bilkent">Cose Bilkent — force-directed</option>
+        <option value="dagre">Dagre — layered / Mermaid default</option>
+      </select>
+    </label>
+
+    <label title="Width used by the sandboxed renderer before viewer zoom is applied.">
+      Render width
+      <input
+        id="renderWidth"
+        type="number"
+        value="1216"
+        min="480"
+        max="3000"
+        step="16"
+        aria-label="Render width"
+      >
+      px
+    </label>
+
+    <label title="Render shortly after editing stops">
+      <input id="live" type="checkbox" checked>
+      Live
+    </label>
+
+    <button id="render" class="primary" type="button">Render</button>
+    <button id="resetExample" type="button">Example</button>
+
+    <span class="spacer"></span>
+    <span id="status" class="status waiting" role="status" aria-live="polite">Starting renderer…</span>
+  </header>
+
+  <main class="workspace">
+    <section class="editor-pane" aria-label="Mermaid source editor">
+      <textarea id="editor" spellcheck="false" aria-label="Mermaid source">flowchart LR
+
+    DEV["👩‍💻 Developer"]
+    GIT["Git Repository"]
+
+    subgraph PIPELINE["🔐 CI / Security Pipeline"]
+        direction TB
+
+        TEST["✅ Unit Tests"]
+        SAST["🔎 SAST"]
+        DEPS["📦 Dependency Scan"]
+        BUILD["🏗️ Build Artifact"]
+
+        TEST --> BUILD
+        SAST --> BUILD
+        DEPS --> BUILD
+    end
+
+    REGISTRY["📦 Artifact Registry"]
+    STAGING["🧪 Staging"]
+    PROD["🚀 Production"]
+
+    DEV --> GIT
+    GIT --> TEST
+    GIT --> SAST
+    GIT --> DEPS
+
+    BUILD --> REGISTRY
+    REGISTRY --> STAGING
+    STAGING --> PROD
+
+    style PIPELINE fill:#e7f1ff,stroke:#2864a8,stroke-width:2px</textarea>
+    </section>
+
+    <section class="preview-pane" id="previewPane" aria-label="Mermaid preview">
+      <div class="preview-toolbar" aria-label="Preview controls">
+        <button id="minus" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+        <span id="zoomLabel" aria-live="polite">100%</span>
+        <button id="plus" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="actual" type="button" title="Actual size">100%</button>
+        <button id="fit" type="button" title="Fit diagram to viewport">Fit</button>
+        <button id="fullscreen" type="button" title="Fullscreen preview" aria-label="Fullscreen preview">⛶</button>
+      </div>
+
+      <div id="viewport">
+        <div id="stage">
+          <iframe
+            id="rendererFrame"
+            title="Sandboxed Mermaid renderer"
+            sandbox="allow-scripts"
+          ></iframe>
+        </div>
+
+        <div id="overlay">Loading Mermaid renderer…</div>
+        <div id="errorBox" role="alert"></div>
+        <div id="diagnostics">Initialising…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>&copy; <span id="copyrightYear"></span> Mermaid Viewer</span>
+    <a
+      class="footer-repo-link"
+      href="https://github.com/safesploitOrg/mermaid-viewer"
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Mermaid Viewer repository on GitHub"
+      title="View Mermaid Viewer on GitHub"
+    >
+      <img src="./assets/images/github-mark.svg" alt="" width="18" height="18">
+    </a>
+  </footer>
+
+  <script type="module" src="./assets/js/app.js"></script>
+</body>
+</html>
