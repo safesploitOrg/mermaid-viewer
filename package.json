@@ -1,6 +1,6 @@
 {
   "name": "mermaid-viewer",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Static Mermaid previewer for comparing ELK, Tidy Tree, Cose Bilkent and Dagre layouts with zoom, pan and GitHub Pages deployment.",
   "type": "module",
