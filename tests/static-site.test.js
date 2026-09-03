@@ -81,12 +81,14 @@ test("unverified warning requires checkbox consent in the static UI", async () =
   assert.match(appSource, /canContinueUnverified/);
 });
 
-test("public example is the generic CI/security demo", async () => {
+test("public example is the CI/CD security pipeline", async () => {
   const html = await readFile(INDEX_PATH, "utf8");
 
-  assert.match(html, /CI \/ Security Pipeline/);
+  assert.match(html, /subgraph CI\["🔵 Continuous Integration"\]/);
+  assert.match(html, /subgraph CD\["🟢 Continuous Delivery"\]/);
   assert.match(html, /Dependency Scan/);
   assert.match(html, /Artifact Registry/);
+  assert.match(html, /BUILD --> REGISTRY/);
 });
 
 test("footer uses a browser-derived year and links to the public repository", async () => {
