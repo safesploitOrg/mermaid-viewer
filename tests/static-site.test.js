@@ -59,7 +59,7 @@ test("footer uses a browser-derived year and links to the public repository", as
   const appSource = await readFile(APP_JS_PATH, "utf8");
 
   assert.match(html, /id="copyrightYear"/);
-  assert.match(html, /SafeSploit/);
+  assert.match(html, /Mermaid Viewer/);
   assert.match(html, /https:\/\/github\.com\/safesploitOrg\/mermaid-viewer/);
   assert.match(html, /\.\/assets\/images\/github-mark\.svg/);
   assert.match(appSource, /browserYear\(\)/);
