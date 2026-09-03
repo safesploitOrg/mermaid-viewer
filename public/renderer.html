@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-bWVybWFpZC12aWV3ZXItcmVuZGVyZXI=' 'strict-dynamic' blob:; style-src 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Mermaid Renderer</title>
   <style>
     html,
@@ -24,7 +25,8 @@
       display: block;
     }
   </style>
-  <script src="./assets/js/renderer.js" defer></script>
+  <script src="./assets/js/externals/mermaid-integrity.js" nonce="bWVybWFpZC12aWV3ZXItcmVuZGVyZXI=" defer></script>
+  <script src="./assets/js/renderer.js" nonce="bWVybWFpZC12aWV3ZXItcmVuZGVyZXI=" defer></script>
 </head>
 <body>
   <div id="diagram"></div>

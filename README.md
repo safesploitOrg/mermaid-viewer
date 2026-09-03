@@ -24,7 +24,9 @@ Official Mermaid layout documentation:
 - ⛶ Full-screen preview
 - 🎨 Light and dark Mermaid themes
 - 📐 Configurable render width
-- 📌 Configurable/pinned Mermaid version
+- 📌 Arbitrary semantic-version testing with explicit integrity state
+- ✅ Repository-controlled SHA-384 verification for bundled trusted versions
+- ⚠️ Per-version consent before an unknown version is downloaded from a CDN
 - 💾 Browser `localStorage` persistence
 - 🧹 Blank input clears the preview rather than producing Mermaid's syntax-error graphic
 - 🔐 Mermaid `securityLevel: "strict"`
@@ -32,7 +34,7 @@ Official Mermaid layout documentation:
 - 📅 Footer year is generated dynamically from the client's browser
 - 🔗 Footer link to the public GitHub repository
 - 🚀 Static GitHub Pages deployment
-- 🧪 Dependency-free Node.js unit tests
+- 🧪 Node.js unit and vendored-artefact checks
 
 ## Project structure
 
@@ -53,8 +55,10 @@ Official Mermaid layout documentation:
 │       ├── js/
 │       │   ├── app.js
 │       │   ├── core.js
+│       │   ├── integrity.js
 │       │   ├── protocol.js
-│       │   └── renderer.js
+│       │   ├── renderer.js
+│       │   └── externals/
 │       └── images/
 │           └── github-mark.svg
 ├── tests/
@@ -92,15 +96,21 @@ You can also use any other static HTTP server.
 
 ## Tests
 
-The project uses Node.js' built-in test runner, so there are no npm dependencies to install.
+Install the exact development dependencies recorded in `package-lock.json`, then run the tests:
 
 ```bash
+npm ci
 npm test
 ```
+
+`npm run check` also rebuilds the trusted single-file artefacts in a temporary directory and verifies that the committed copies are reproducible.
 
 The tests cover:
 
 - Mermaid version validation
+- trusted-version lookup, SHA-384 matching and mismatch blocking
+- unknown-version consent scoping and CDN URL construction
+- committed artefact digest verification
 - blank-input detection
 - all four layout values and labels
 - theme normalisation
@@ -134,10 +144,12 @@ Tidy Tree is intended for hierarchical/tree-oriented diagrams. It is also loaded
 ```
 
 Mermaid documents the package as an optional layout that providers must register before use.
+It is designed for compatible tree-oriented diagram families such as mindmaps. Mermaid 11.15 cannot apply it to a general flowchart; the viewer reports that compatibility error and recommends ELK or Dagre instead of showing Mermaid's misleading syntax-error graphic.
 
 ### Cose Bilkent
 
-Cose Bilkent is a force-directed layout. The viewer uses Mermaid's full ESM build, where Cose Bilkent is included as a built-in layout.
+Cose Bilkent is a force-directed layout. The viewer uses Mermaid's full browser bundle, where Cose Bilkent is included as a built-in layout.
+Cose Bilkent likewise depends on diagram types that provide Mermaid's generic rooted layout data (for example, mindmaps). The bundled example uses mindmap syntax so it can be compared across all four layouts.
 
 ### Dagre
 
@@ -156,7 +168,15 @@ The version is editable in the UI and saved locally in the browser. This makes i
 - **layout differences**, and
 - **Mermaid runtime version differences**.
 
-The renderer first attempts to load the selected Mermaid version from jsDelivr and falls back to unpkg if required.
+Version `11.15.0` has a repository-controlled integrity record and a local, single-file browser bundle. Any other syntactically valid semantic version remains usable, but the viewer does not download it until the user explicitly accepts the unverified-version warning. Unverified downloads try jsDelivr and then unpkg.
+
+The visible integrity state covers the complete selected executable stack:
+
+1. **Verified** — Mermaid and any external layout bundle have repository-owned SHA-384 digests, and every downloaded byte matches.
+2. **Unverified** — integrity metadata is missing and the user explicitly approved that Mermaid version for the current browser session.
+3. **Integrity failure / blocked** — a known artefact does not match its expected digest. There is no bypass.
+
+Changing the Mermaid version clears prior consent. Consent is never stored in `localStorage`.
 
 ## Security model
 
@@ -174,9 +194,20 @@ Instead:
 3. `allow-same-origin` is deliberately omitted.
 4. Parent/renderer messages are scoped with a per-session random channel ID and validated against the expected iframe window.
 5. Mermaid runs with `securityLevel: "strict"`.
-6. Mermaid source is rendered in-browser; the application does not intentionally send it to a remote rendering API.
+6. Trusted Mermaid and layout artefacts are fetched locally and checked with Web Crypto before execution. The sandbox repeats the digest check before creating a Blob-backed script.
+7. Unknown Mermaid versions are fetched from an explicitly allow-listed CDN only after consent and are always labelled unverified.
+8. Mermaid source is rendered in-browser; the application does not intentionally send it to a remote rendering API.
 
-The Mermaid and optional layout JavaScript is still obtained from public CDNs, so the CDN remains part of the supply chain.
+The trusted artefacts are generated with `npm run vendor:externals`. Exact package versions are pinned in `package.json`, npm download integrity is pinned by `package-lock.json`, and CI runs `npm run vendor:check`.
+
+### Updating trusted artefacts
+
+1. Pin reviewed package versions with `npm install --save-dev --save-exact`.
+2. If the default Mermaid version changes, update it in `core.js`, `renderer.js`, and the version input/datalist in `index.html`.
+3. Run `npm run vendor:externals` to rebuild the single-file bundles, licences and digest manifest.
+4. Review the generated bundle changes and run `npm run check` plus the browser smoke tests before committing.
+
+Do not edit `mermaid-integrity.js` by hand. Adding a digest means approving those exact executable bytes; it should follow dependency and compatibility review, not merely a successful download.
 
 See [SECURITY.md](SECURITY.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for more detail.
 

@@ -20,12 +20,15 @@ import {
 test("validates normal Mermaid semantic versions", () => {
   assert.equal(validateMermaidVersion("11.15.0"), "11.15.0");
   assert.equal(validateMermaidVersion(" 12.0.0-beta.1 "), "12.0.0-beta.1");
+  assert.equal(validateMermaidVersion("12.0.0-rc.1+review.2"), "12.0.0-rc.1+review.2");
 });
 
 test("rejects unsafe or malformed Mermaid version strings", () => {
   assert.throws(() => validateMermaidVersion("latest"));
   assert.throws(() => validateMermaidVersion("11.15"));
   assert.throws(() => validateMermaidVersion("11.15.0/../../bad"));
+  assert.throws(() => validateMermaidVersion("011.15.0"));
+  assert.throws(() => validateMermaidVersion("11.15.0-01"));
   assert.throws(() => validateMermaidVersion(""));
 });
 
