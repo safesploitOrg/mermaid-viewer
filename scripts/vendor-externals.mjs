@@ -24,16 +24,34 @@ const temporaryRoot = isCheck
   : null;
 const outputRoot = temporaryRoot || committedRoot;
 
-const versions = {
-  mermaid: packageJson.devDependencies.mermaid,
+const layoutVersions = {
   elk: packageJson.devDependencies["@mermaid-js/layout-elk"],
   tidyTree: packageJson.devDependencies["@mermaid-js/layout-tidy-tree"],
 };
 
-for (const [name, version] of Object.entries(versions)) {
+const trustedMermaidPackages = Object.entries(packageJson.devDependencies)
+  .filter(([name, specification]) => (
+    name === "mermaid" || specification.startsWith("npm:mermaid@")
+  ))
+  .map(([packagePath, specification]) => ({
+    packagePath,
+    version: packagePath === "mermaid"
+      ? specification
+      : specification.slice("npm:mermaid@".length),
+  }));
+
+for (const [name, version] of [
+  ...trustedMermaidPackages.map(({ packagePath, version }) => [packagePath, version]),
+  ...Object.entries(layoutVersions),
+]) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error(`${name} must be pinned to an exact semantic version`);
   }
+}
+
+if (new Set(trustedMermaidPackages.map(({ version }) => version)).size
+    !== trustedMermaidPackages.length) {
+  throw new Error("Trusted Mermaid versions must be unique");
 }
 
 await rm(outputRoot, { recursive: true, force: true });
@@ -61,14 +79,20 @@ async function bundleLayout({ packageName, globalProperty, filename }) {
   });
 }
 
-const mermaidFilename = `mermaid-${versions.mermaid}.min.js`;
-const elkFilename = `layout-elk-${versions.elk}.min.js`;
-const tidyTreeFilename = `layout-tidy-tree-${versions.tidyTree}.min.js`;
+const elkFilename = `layout-elk-${layoutVersions.elk}.min.js`;
+const tidyTreeFilename = `layout-tidy-tree-${layoutVersions.tidyTree}.min.js`;
 
-await cp(
-  join(repositoryRoot, "node_modules/mermaid/dist/mermaid.min.js"),
-  join(outputRoot, mermaidFilename),
-);
+for (const { packagePath, version } of trustedMermaidPackages) {
+  await cp(
+    join(repositoryRoot, "node_modules", packagePath, "dist/mermaid.min.js"),
+    join(outputRoot, `mermaid-${version}.min.js`),
+  );
+  await cp(
+    join(repositoryRoot, "node_modules", packagePath, "LICENSE"),
+    join(outputRoot, "licenses", `mermaid-${version}.LICENSE.txt`),
+  );
+}
+
 await bundleLayout({
   packageName: "@mermaid-js/layout-elk",
   globalProperty: "elk",
@@ -81,11 +105,10 @@ await bundleLayout({
 });
 
 for (const [packagePath, filename] of [
-  ["mermaid", `mermaid-${versions.mermaid}.LICENSE.txt`],
-  ["@mermaid-js/layout-elk", `layout-elk-${versions.elk}.LICENSE.txt`],
+  ["@mermaid-js/layout-elk", `layout-elk-${layoutVersions.elk}.LICENSE.txt`],
   [
     "@mermaid-js/layout-tidy-tree",
-    `layout-tidy-tree-${versions.tidyTree}.LICENSE.txt`,
+    `layout-tidy-tree-${layoutVersions.tidyTree}.LICENSE.txt`,
   ],
 ]) {
   await cp(
@@ -109,19 +132,18 @@ const artifact = async (filename, packageName, version) => ({
 const manifest = {
   schemaVersion: 1,
   algorithm: "SHA-384",
-  versions: {
-    [versions.mermaid]: await artifact(
-      mermaidFilename,
-      "mermaid",
-      versions.mermaid,
-    ),
-  },
+  versions: Object.fromEntries(await Promise.all(
+    trustedMermaidPackages.map(async ({ version }) => [
+      version,
+      await artifact(`mermaid-${version}.min.js`, "mermaid", version),
+    ]),
+  )),
   layouts: {
-    elk: await artifact(elkFilename, "@mermaid-js/layout-elk", versions.elk),
+    elk: await artifact(elkFilename, "@mermaid-js/layout-elk", layoutVersions.elk),
     "tidy-tree": await artifact(
       tidyTreeFilename,
       "@mermaid-js/layout-tidy-tree",
-      versions.tidyTree,
+      layoutVersions.tidyTree,
     ),
     "cose-bilkent": { builtIn: true },
     dagre: { builtIn: true },

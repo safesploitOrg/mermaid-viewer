@@ -17,17 +17,22 @@ import {
   digestMatches,
   downloadAndVerify,
   downloadFirst,
+  hasRememberedVersionApproval,
   hasVersionConsent,
   integrityCoverage,
   overallIntegrityState,
+  parseRememberedVersionApprovals,
+  rememberVersionApproval,
   trustedVersionRecord,
 } from "../public/assets/js/integrity.js";
 
 test("recognised and unknown Mermaid versions are distinguished", () => {
   assert.equal(trustedVersionRecord("11.15.0")?.version, "11.15.0");
-  assert.equal(trustedVersionRecord("11.17.2"), null);
+  assert.equal(trustedVersionRecord("11.17.2")?.version, "11.17.2");
+  assert.equal(trustedVersionRecord("11.18.0"), null);
   assert.equal(integrityCoverage("11.15.0", "elk").fullyCovered, true);
-  assert.equal(integrityCoverage("11.17.2", "elk").fullyCovered, false);
+  assert.equal(integrityCoverage("11.17.2", "elk").fullyCovered, true);
+  assert.equal(integrityCoverage("11.18.0", "elk").fullyCovered, false);
 });
 
 test("unverified CDN URLs can only be built from strict semantic versions", () => {
@@ -99,21 +104,35 @@ test("integrity failure always dominates overall state", () => {
 test("unverified continuation requires the explicit checkbox", () => {
   assert.equal(canContinueUnverified({
     checkboxChecked: false,
-    requestedVersion: "11.17.2",
+    requestedVersion: "11.18.0",
   }), false);
   assert.equal(canContinueUnverified({
     checkboxChecked: true,
-    requestedVersion: "11.17.2",
+    requestedVersion: "11.18.0",
   }), true);
 });
 
 test("consent is scoped to one selected version and changing it clears consent", () => {
-  const approved = approveVersion({ approvedVersion: null }, "11.17.2");
-  assert.equal(hasVersionConsent(approved, "11.17.2"), true);
-  assert.equal(hasVersionConsent(approved, "11.18.0"), false);
-  assert.deepEqual(clearConsentForVersionChange(approved, "11.18.0"), {
+  const approved = approveVersion({ approvedVersion: null }, "11.18.0");
+  assert.equal(hasVersionConsent(approved, "11.18.0"), true);
+  assert.equal(hasVersionConsent(approved, "11.19.0"), false);
+  assert.deepEqual(clearConsentForVersionChange(approved, "11.19.0"), {
     approvedVersion: null,
   });
+});
+
+test("remembered unverified approvals survive reload data and remain version scoped", () => {
+  const remembered = rememberVersionApproval([], "11.18.0");
+  const restored = parseRememberedVersionApprovals(JSON.stringify([
+    ...remembered,
+    "11.18.0",
+    "latest",
+  ]));
+
+  assert.deepEqual(restored, ["11.18.0"]);
+  assert.equal(hasRememberedVersionApproval(restored, "11.18.0"), true);
+  assert.equal(hasRememberedVersionApproval(restored, "11.19.0"), false);
+  assert.deepEqual(parseRememberedVersionApprovals("not JSON"), []);
 });
 
 test("network failures have a different error code from integrity failures", async () => {

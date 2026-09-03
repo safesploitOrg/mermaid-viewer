@@ -124,7 +124,7 @@ The static renderer currently pins:
 @mermaid-js/layout-tidy-tree 0.2.2
 ```
 
-Mermaid itself remains selectable in the UI and defaults to `11.15.0`.
+Mermaid itself remains selectable in the UI and defaults to `11.15.0`. The trusted-version dropdown also includes the locally bundled `11.17.2` release, while a custom option accepts other complete semantic versions.
 
 This separation is intentional: Mermaid and its optional layout packages have independent release versions.
 
@@ -187,16 +187,16 @@ flowchart TD
 There are three externally visible outcomes:
 
 - **Verified:** every executable in the selected stack has an expected digest and matches it.
-- **Unverified:** integrity metadata was absent and the user explicitly approved that Mermaid version for this session.
+- **Unverified:** integrity metadata was absent and the user explicitly approved that exact Mermaid version for the current selection or stored a remembered browser approval.
 - **Failed:** a known digest did not match; execution is blocked with no override.
 
 ## Artefact and CDN behaviour
 
-The preferred Mermaid version and both optional layouts use committed, single-file bundles. `scripts/vendor-externals.mjs` copies Mermaid's self-contained browser build, bundles each optional layout and writes SHA-384 digests into the manifest. `package-lock.json` pins registry integrity, and `npm run vendor:check` independently rebuilds and compares every output in CI.
+Both trusted Mermaid versions and both optional layouts use committed, single-file bundles. `scripts/vendor-externals.mjs` copies each pinned Mermaid browser build, bundles each optional layout and writes SHA-384 digests into the manifest. `package-lock.json` pins registry integrity, and `npm run vendor:check` independently rebuilds and compares every output in CI.
 
 This single-file approach was selected because Mermaid's ESM entry imports many executable chunks. Hashing only that entry would not authenticate the code that ultimately executes.
 
-For an unknown Mermaid version, and only after explicit consent, the parent tries:
+For an unknown Mermaid version, and only after current or remembered version-specific consent, the parent tries:
 
 1. jsDelivr
 2. unpkg as a fallback

@@ -94,6 +94,11 @@ select {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+#versionPreset {
+  width: 178px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 #renderWidth {
   width: 100px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -210,6 +215,10 @@ button.primary:hover {
   align-items: flex-start;
   margin: 18px 0;
   white-space: normal;
+}
+
+.remember-consent {
+  margin-top: -8px;
 }
 
 .dialog-actions {

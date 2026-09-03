@@ -16,17 +16,22 @@
 
     <label>
       Mermaid
+      <select id="versionPreset" aria-label="Mermaid version selection">
+        <optgroup label="Integrity verified">
+          <option value="11.15.0" selected>11.15.0 — default</option>
+          <option value="11.17.2">11.17.2 — latest verified</option>
+        </optgroup>
+        <option value="custom">Other version…</option>
+      </select>
       <input
         id="version"
         type="text"
         value="11.15.0"
-        list="knownMermaidVersions"
+        hidden
         spellcheck="false"
-        aria-label="Mermaid version"
+        aria-label="Custom Mermaid version"
+        placeholder="e.g. 11.16.1"
       >
-      <datalist id="knownMermaidVersions">
-        <option value="11.15.0">Integrity metadata available</option>
-      </datalist>
     </label>
     <span id="integrityStatus" class="integrity-status checking" aria-live="polite">Checking integrity…</span>
 
@@ -172,6 +177,10 @@ flowchart LR
       <label class="consent-label">
         <input id="integrityConsent" type="checkbox">
         <span>I understand that this version cannot be integrity-verified.</span>
+      </label>
+      <label class="consent-label remember-consent">
+        <input id="rememberUnverified" type="checkbox">
+        <span>Do not ask again for this Mermaid version on this browser. The yellow unverified warning will remain visible.</span>
       </label>
       <div class="dialog-actions">
         <button id="cancelUnverified" type="button">Cancel</button>

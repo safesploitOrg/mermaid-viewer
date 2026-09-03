@@ -15,11 +15,11 @@ Parent/renderer `postMessage` traffic is scoped with a random per-renderer chann
 
 ## Executable integrity model
 
-The repository contains single-file browser bundles and SHA-384 digests for Mermaid `11.15.0`, `@mermaid-js/layout-elk` `0.2.1`, and `@mermaid-js/layout-tidy-tree` `0.2.2`. Dagre and Cose Bilkent are included in the Mermaid bundle. A rendering session is labelled **verified** only after Mermaid and every external package required by the selected layout match the repository-controlled digests.
+The repository contains single-file browser bundles and SHA-384 digests for Mermaid `11.15.0` and `11.17.2`, `@mermaid-js/layout-elk` `0.2.1`, and `@mermaid-js/layout-tidy-tree` `0.2.2`. Dagre and Cose Bilkent are included in each Mermaid bundle. A rendering session is labelled **verified** only after Mermaid and every external package required by the selected layout match the repository-controlled digests.
 
 The parent page fetches and checks the bytes with Web Crypto. It then passes those bytes into the sandbox, where the renderer checks the digest again before executing a Blob-backed classic script. A known digest mismatch is a hard failure and cannot be bypassed.
 
-Unknown but syntactically valid Mermaid versions remain available for compatibility testing. They are not downloaded until the user checks the warning acknowledgement and continues. That consent applies only to the selected version, is cleared when the version changes, and is not persisted. jsDelivr is tried first and unpkg is the network fallback. CDN fallback does not improve or change the **unverified** state.
+Unknown but syntactically valid Mermaid versions remain available for compatibility testing. They are not downloaded until the user checks the warning acknowledgement and continues. That consent applies only to the exact selected version. The user may optionally remember that approval in browser `localStorage`, which prevents the dialog from returning for that version after refresh; clearing the site's browser data revokes it. Remembered approval never changes the visible **unverified** state. jsDelivr is tried first and unpkg is the network fallback.
 
 Integrity checking protects against an artefact that differs from the bytes approved in this repository, including CDN or transit modification. It does not protect against:
 

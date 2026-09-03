@@ -8,6 +8,12 @@ globalThis.MERMAID_VIEWER_INTEGRITY_MANIFEST = {
       "version": "11.15.0",
       "artifact": "./assets/js/externals/mermaid-11.15.0.min.js",
       "digest": "sha384-yQ4mmBBT+vhTAwjFH0toJXNYJ6O4usWnt6EPIdWwrRvx2V/n5lXuDZQwQFeSFydF"
+    },
+    "11.17.2": {
+      "package": "mermaid",
+      "version": "11.17.2",
+      "artifact": "./assets/js/externals/mermaid-11.17.2.min.js",
+      "digest": "sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2"
     }
   },
   "layouts": {

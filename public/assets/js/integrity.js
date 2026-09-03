@@ -176,6 +176,42 @@ export function clearConsentForVersionChange(consent, nextVersion) {
     : { approvedVersion: null };
 }
 
+export function parseRememberedVersionApprovals(serialized) {
+  let values;
+
+  try {
+    values = JSON.parse(serialized || "[]");
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const validVersions = [];
+  for (const value of values) {
+    try {
+      validVersions.push(validateMermaidVersion(value));
+    } catch {
+      // Ignore malformed local data instead of granting consent for it.
+    }
+  }
+
+  return [...new Set(validVersions)].sort();
+}
+
+export function rememberVersionApproval(approvedVersions, version) {
+  const approvedVersion = validateMermaidVersion(version);
+  const existingVersions = Array.isArray(approvedVersions) ? approvedVersions : [];
+  return [...new Set([...existingVersions, approvedVersion])].sort();
+}
+
+export function hasRememberedVersionApproval(approvedVersions, version) {
+  return Array.isArray(approvedVersions)
+    && approvedVersions.includes(validateMermaidVersion(version));
+}
+
 export function canContinueUnverified({ checkboxChecked, requestedVersion }) {
   try {
     validateMermaidVersion(requestedVersion);

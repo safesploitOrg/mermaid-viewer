@@ -9,6 +9,8 @@ const RENDERER_JS_PATH = new URL("../public/assets/js/renderer.js", import.meta.
 const GITHUB_ICON_PATH = new URL("../public/assets/images/github-mark.svg", import.meta.url);
 const NOJEKYLL_PATH = new URL("../public/.nojekyll", import.meta.url);
 const ARCHITECTURE_PATH = new URL("../ARCHITECTURE.md", import.meta.url);
+const CHANGELOG_PATH = new URL("../CHANGELOG.md", import.meta.url);
+const PACKAGE_PATH = new URL("../package.json", import.meta.url);
 const INTEGRITY_PATH = new URL("../public/assets/js/integrity.js", import.meta.url);
 const MANIFEST_PATH = new URL(
   "../public/assets/js/externals/mermaid-integrity.js",
@@ -71,14 +73,20 @@ test("renderer suppresses misleading Mermaid error SVGs and explains incompatibl
   assert.match(source, /cannot lay out flowchart diagrams/);
 });
 
-test("unverified warning requires checkbox consent in the static UI", async () => {
+test("trusted versions have a dropdown and unverified consent can be remembered", async () => {
   const html = await readFile(INDEX_PATH, "utf8");
   const appSource = await readFile(APP_JS_PATH, "utf8");
 
+  assert.match(html, /id="versionPreset"/);
+  assert.match(html, /value="11\.15\.0" selected>11\.15\.0 — default/);
+  assert.match(html, /value="11\.17\.2">11\.17\.2 — latest verified/);
+  assert.match(html, /value="custom">Other version/);
   assert.match(html, /id="integrityConsent" type="checkbox"/);
+  assert.match(html, /id="rememberUnverified" type="checkbox"/);
   assert.match(html, /id="continueUnverified"[^>]*disabled/);
   assert.match(html, /Integrity could not be verified/);
   assert.match(appSource, /canContinueUnverified/);
+  assert.match(appSource, /mermaid-viewer-unverified-approvals/);
 });
 
 test("public example is the CI/CD security pipeline", async () => {
@@ -102,10 +110,20 @@ test("footer uses a browser-derived year and links to the public repository", as
   assert.match(appSource, /browserYear\(\)/);
 });
 
+test("release metadata and changelog identify version 1.2.0", async () => {
+  const packageMetadata = JSON.parse(await readFile(PACKAGE_PATH, "utf8"));
+  const changelog = await readFile(CHANGELOG_PATH, "utf8");
+
+  assert.equal(packageMetadata.version, "1.2.0");
+  assert.match(changelog, /## \[1\.2\.0\] - 2026-09-03/);
+  assert.match(changelog, /## \[1\.1\.0\] - 2026-09-03/);
+});
+
 test("renderer page, icon, architecture and GitHub Pages marker exist", async () => {
   await access(RENDERER_PATH);
   await access(GITHUB_ICON_PATH);
   await access(ARCHITECTURE_PATH);
+  await access(CHANGELOG_PATH);
   await access(INTEGRITY_PATH);
   await access(MANIFEST_PATH);
   await access(NOJEKYLL_PATH);

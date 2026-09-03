@@ -32,16 +32,22 @@ import {
   downloadAndVerify,
   downloadFirst,
   hasDigest,
+  hasRememberedVersionApproval,
   hasVersionConsent,
   integrityCoverage,
+  parseRememberedVersionApprovals,
+  rememberVersionApproval,
 } from "./integrity.js";
 
 const LIVE_DELAY_MS = 350;
 const RENDER_TIMEOUT_MS = 10000;
 const MINIMUM_FRAME_HEIGHT = 240;
+const CUSTOM_VERSION_OPTION = "custom";
+const REMEMBERED_APPROVALS_KEY = "mermaid-viewer-unverified-approvals";
 
 const editor = document.getElementById("editor");
 const versionInput = document.getElementById("version");
+const versionPreset = document.getElementById("versionPreset");
 const themeSelect = document.getElementById("theme");
 const layoutSelect = document.getElementById("layout");
 const widthInput = document.getElementById("renderWidth");
@@ -61,6 +67,7 @@ const copyrightYear = document.getElementById("copyrightYear");
 const integrityDialog = document.getElementById("integrityDialog");
 const integrityDialogDescription = document.getElementById("integrityDialogDescription");
 const integrityConsent = document.getElementById("integrityConsent");
+const rememberUnverified = document.getElementById("rememberUnverified");
 const continueUnverified = document.getElementById("continueUnverified");
 const cancelUnverified = document.getElementById("cancelUnverified");
 
@@ -80,6 +87,7 @@ let fitAfterRender = true;
 let currentArtifacts = null;
 let rendererArtifactsReady = false;
 let consent = { approvedVersion: null };
+let rememberedVersionApprovals = [];
 let pendingUnverifiedVersion = null;
 let rendererRequestId = 0;
 
@@ -203,6 +211,31 @@ function persistSettings() {
   localStorage.setItem("mermaid-viewer-width", String(renderWidthPx()));
 }
 
+function hasApprovedVersion(version) {
+  return hasVersionConsent(consent, version)
+    || hasRememberedVersionApproval(rememberedVersionApprovals, version);
+}
+
+function rememberApprovedVersion(version) {
+  rememberedVersionApprovals = rememberVersionApproval(
+    rememberedVersionApprovals,
+    version,
+  );
+  localStorage.setItem(
+    REMEMBERED_APPROVALS_KEY,
+    JSON.stringify(rememberedVersionApprovals),
+  );
+}
+
+function useVersionInControls(version) {
+  const trustedOption = [...versionPreset.options]
+    .some((option) => option.value === version);
+
+  versionInput.value = version;
+  versionPreset.value = trustedOption ? version : CUSTOM_VERSION_OPTION;
+  versionInput.hidden = trustedOption;
+}
+
 function localArtifactUrl(record) {
   return new URL(record.artifact, window.location.href).href;
 }
@@ -285,6 +318,7 @@ function invalidateRenderer() {
 function showUnverifiedWarning(version, coverage) {
   pendingUnverifiedVersion = version;
   integrityConsent.checked = false;
+  rememberUnverified.checked = false;
   continueUnverified.disabled = true;
   integrityDialogDescription.textContent = coverage.knownVersion
     ? `The selected rendering stack for Mermaid ${version} is missing trusted integrity metadata.`
@@ -299,6 +333,7 @@ function hideUnverifiedWarning() {
   integrityDialog.hidden = true;
   pendingUnverifiedVersion = null;
   integrityConsent.checked = false;
+  rememberUnverified.checked = false;
   continueUnverified.disabled = true;
 }
 
@@ -320,7 +355,7 @@ async function createRenderer({ fitAfter = true } = {}) {
   const layout = normaliseLayout(layoutSelect.value);
   const coverage = integrityCoverage(version, layout);
 
-  if (!coverage.fullyCovered && !hasVersionConsent(consent, version)) {
+  if (!coverage.fullyCovered && !hasApprovedVersion(version)) {
     invalidateRenderer();
     showUnverifiedWarning(version, coverage);
     showOverlay("Unverified JavaScript will not be downloaded without explicit consent.");
@@ -471,7 +506,7 @@ function sendRender({ fitAfter = false } = {}) {
       theme,
       layout,
       artifacts: rendererArtifactsReady ? null : currentArtifacts,
-      unverifiedConsentVersion: hasVersionConsent(consent, version)
+      unverifiedConsentVersion: hasApprovedVersion(version)
         ? version
         : null,
     },
@@ -619,7 +654,7 @@ editor.addEventListener("keydown", (event) => {
   }
 });
 
-versionInput.addEventListener("input", () => {
+function handleVersionChange() {
   consent = clearConsentForVersionChange(consent, versionInput.value);
   invalidateRenderer();
   hideUnverifiedWarning();
@@ -636,8 +671,32 @@ versionInput.addEventListener("input", () => {
     setIntegrityStatus(INTEGRITY_UNVERIFIED, "⚠️ Invalid version");
     setDiagnostics("Invalid Mermaid semantic version · execution stopped");
   }
+}
+
+versionInput.addEventListener("input", () => {
+  versionPreset.value = CUSTOM_VERSION_OPTION;
+  handleVersionChange();
 });
 versionInput.addEventListener("change", () => createRenderer({ fitAfter: true }));
+
+versionPreset.addEventListener("change", () => {
+  if (versionPreset.value === CUSTOM_VERSION_OPTION) {
+    invalidateRenderer();
+    hideUnverifiedWarning();
+    versionInput.hidden = false;
+    versionInput.focus();
+    versionInput.select();
+    setIntegrityStatus(INTEGRITY_UNVERIFIED, "⚠️ Enter version");
+    setDiagnostics("Enter a custom Mermaid semantic version");
+    showOverlay("Enter a custom Mermaid version to continue.");
+    return;
+  }
+
+  useVersionInControls(versionPreset.value);
+  handleVersionChange();
+  createRenderer({ fitAfter: true });
+});
+
 themeSelect.addEventListener("change", () => sendRender({ fitAfter: true }));
 layoutSelect.addEventListener("change", () => sendRender({ fitAfter: true }));
 
@@ -665,6 +724,9 @@ continueUnverified.addEventListener("click", () => {
 
   const approvedVersion = pendingUnverifiedVersion;
   consent = approveVersion(consent, approvedVersion);
+  if (rememberUnverified.checked) {
+    rememberApprovedVersion(approvedVersion);
+  }
   hideUnverifiedWarning();
   createRenderer({ fitAfter: true });
 });
@@ -774,18 +836,23 @@ function restoreSettings() {
   const savedTheme = localStorage.getItem("mermaid-viewer-theme");
   const savedLayout = localStorage.getItem("mermaid-viewer-layout");
   const savedWidth = localStorage.getItem("mermaid-viewer-width");
+  rememberedVersionApprovals = parseRememberedVersionApprovals(
+    localStorage.getItem(REMEMBERED_APPROVALS_KEY),
+  );
 
   if (savedSource !== null) {
     editor.value = savedSource;
   }
 
+  let restoredVersion = DEFAULTS.mermaidVersion;
   try {
-    if (savedVersion) {
-      versionInput.value = validateMermaidVersion(savedVersion);
-    }
+    restoredVersion = savedVersion
+      ? validateMermaidVersion(savedVersion)
+      : DEFAULTS.mermaidVersion;
   } catch {
-    versionInput.value = DEFAULTS.mermaidVersion;
+    restoredVersion = DEFAULTS.mermaidVersion;
   }
+  useVersionInControls(restoredVersion);
 
   themeSelect.value = normaliseTheme(savedTheme || DEFAULTS.theme);
   layoutSelect.value = normaliseLayout(savedLayout || DEFAULTS.layout);
