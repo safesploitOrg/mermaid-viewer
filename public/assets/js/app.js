@@ -19,6 +19,23 @@ import {
   isExpectedFrameMessage,
 } from "./protocol.js";
 
+import {
+  INTEGRITY_FAILED,
+  INTEGRITY_UNVERIFIED,
+  INTEGRITY_VERIFIED,
+  LOAD_INTEGRITY_ERROR,
+  LOAD_NETWORK_ERROR,
+  approveVersion,
+  buildUnverifiedMermaidUrls,
+  canContinueUnverified,
+  clearConsentForVersionChange,
+  downloadAndVerify,
+  downloadFirst,
+  hasDigest,
+  hasVersionConsent,
+  integrityCoverage,
+} from "./integrity.js";
+
 const LIVE_DELAY_MS = 350;
 const RENDER_TIMEOUT_MS = 10000;
 const MINIMUM_FRAME_HEIGHT = 240;
@@ -38,14 +55,21 @@ const overlay = document.getElementById("overlay");
 const errorBox = document.getElementById("errorBox");
 const diagnostics = document.getElementById("diagnostics");
 const status = document.getElementById("status");
+const integrityStatus = document.getElementById("integrityStatus");
 const zoomLabel = document.getElementById("zoomLabel");
 const copyrightYear = document.getElementById("copyrightYear");
+const integrityDialog = document.getElementById("integrityDialog");
+const integrityDialogDescription = document.getElementById("integrityDialogDescription");
+const integrityConsent = document.getElementById("integrityConsent");
+const continueUnverified = document.getElementById("continueUnverified");
+const cancelUnverified = document.getElementById("cancelUnverified");
 
 const defaultExample = editor.value;
 
 let frameHeight = 720;
 let rendererReady = false;
 let currentRendererVersion = null;
+let currentRendererLayout = null;
 let channel = "";
 let scale = 1;
 let panX = 24;
@@ -53,6 +77,11 @@ let panY = 24;
 let liveTimer = null;
 let renderTimeout = null;
 let fitAfterRender = true;
+let currentArtifacts = null;
+let rendererArtifactsReady = false;
+let consent = { approvedVersion: null };
+let pendingUnverifiedVersion = null;
+let rendererRequestId = 0;
 
 let dragging = false;
 let dragPointer = null;
@@ -68,6 +97,11 @@ function setStatus(text, state = "waiting") {
 
 function setDiagnostics(text) {
   diagnostics.textContent = text;
+}
+
+function setIntegrityStatus(state, text) {
+  integrityStatus.className = `integrity-status ${state}`;
+  integrityStatus.textContent = text;
 }
 
 function showOverlay(text) {
@@ -155,7 +189,7 @@ function startRenderTimeout() {
   renderTimeout = window.setTimeout(() => {
     setStatus("Renderer timed out", "error");
     showOverlay(
-      "The sandboxed renderer did not respond. Check browser access to cdn.jsdelivr.net or unpkg.com.",
+      "The sandboxed renderer did not respond after its executable artefacts were prepared.",
     );
     setDiagnostics("Timeout waiting for sandboxed renderer");
   }, RENDER_TIMEOUT_MS);
@@ -169,19 +203,138 @@ function persistSettings() {
   localStorage.setItem("mermaid-viewer-width", String(renderWidthPx()));
 }
 
-function createRenderer({ fitAfter = true } = {}) {
+function localArtifactUrl(record) {
+  return new URL(record.artifact, window.location.href).href;
+}
+
+async function loadTrustedArtifact(record, label) {
+  try {
+    return await downloadAndVerify(
+      [localArtifactUrl(record)],
+      record.digest,
+    );
+  } catch (error) {
+    if (error.code === LOAD_INTEGRITY_ERROR) {
+      throw new Error(
+        `❌ Integrity verification failed\n\n${label} does not match the integrity value trusted by Mermaid Viewer.\n\nExecution has been blocked.`,
+        { cause: error },
+      );
+    }
+
+    const wrapped = new Error(
+      `Unable to download ${label}. The trusted local artefact did not respond successfully.`,
+      { cause: error },
+    );
+    wrapped.code = LOAD_NETWORK_ERROR;
+    throw wrapped;
+  }
+}
+
+async function prepareArtifacts(version, layout, coverage) {
+  let mermaidArtifact;
+
+  if (hasDigest(coverage.mermaid)) {
+    mermaidArtifact = await loadTrustedArtifact(
+      coverage.mermaid,
+      `Mermaid ${version}`,
+    );
+  } else {
+    try {
+      mermaidArtifact = await downloadFirst(buildUnverifiedMermaidUrls(version));
+    } catch (error) {
+      const wrapped = new Error(
+        `Unable to download Mermaid ${version}. Neither configured CDN responded successfully.`,
+        { cause: error },
+      );
+      wrapped.code = LOAD_NETWORK_ERROR;
+      throw wrapped;
+    }
+  }
+
+  let layoutArtifact = null;
+  if (!coverage.layout?.builtIn) {
+    if (!coverage.layout?.artifact) {
+      throw new Error(`No executable artefact is configured for layout ${layout}`);
+    }
+
+    layoutArtifact = hasDigest(coverage.layout)
+      ? await loadTrustedArtifact(
+        coverage.layout,
+        `${coverage.layout.package} ${coverage.layout.version}`,
+      )
+      : await downloadFirst([localArtifactUrl(coverage.layout)]);
+  }
+
+  return {
+    mermaid: mermaidArtifact,
+    layout: layoutArtifact,
+  };
+}
+
+function invalidateRenderer() {
+  rendererRequestId += 1;
+  rendererReady = false;
+  currentRendererVersion = null;
+  currentRendererLayout = null;
+  currentArtifacts = null;
+  rendererArtifactsReady = false;
+  clearRenderTimeout();
+  iframe.src = "about:blank";
+}
+
+function showUnverifiedWarning(version, coverage) {
+  pendingUnverifiedVersion = version;
+  integrityConsent.checked = false;
+  continueUnverified.disabled = true;
+  integrityDialogDescription.textContent = coverage.knownVersion
+    ? `The selected rendering stack for Mermaid ${version} is missing trusted integrity metadata.`
+    : `Mermaid Viewer does not have a trusted integrity record for Mermaid version ${version}.`;
+  integrityDialog.hidden = false;
+  setIntegrityStatus(INTEGRITY_UNVERIFIED, "⚠️ Integrity unverified");
+  setStatus("Awaiting unverified-version consent", "waiting");
+  setDiagnostics(`Integrity metadata missing · Mermaid ${version} · execution not started`);
+}
+
+function hideUnverifiedWarning() {
+  integrityDialog.hidden = true;
+  pendingUnverifiedVersion = null;
+  integrityConsent.checked = false;
+  continueUnverified.disabled = true;
+}
+
+async function createRenderer({ fitAfter = true } = {}) {
   let version;
 
   try {
     version = validateMermaidVersion(versionInput.value);
   } catch (error) {
+    invalidateRenderer();
+    hideUnverifiedWarning();
     showError(error.message);
     setStatus("Invalid Mermaid version", "error");
+    setIntegrityStatus(INTEGRITY_UNVERIFIED, "⚠️ Invalid version");
     return;
   }
 
+  versionInput.value = version;
+  const layout = normaliseLayout(layoutSelect.value);
+  const coverage = integrityCoverage(version, layout);
+
+  if (!coverage.fullyCovered && !hasVersionConsent(consent, version)) {
+    invalidateRenderer();
+    showUnverifiedWarning(version, coverage);
+    showOverlay("Unverified JavaScript will not be downloaded without explicit consent.");
+    return;
+  }
+
+  hideUnverifiedWarning();
+  const requestId = ++rendererRequestId;
+
   rendererReady = false;
   currentRendererVersion = version;
+  currentRendererLayout = layout;
+  currentArtifacts = null;
+  rendererArtifactsReady = false;
   channel = createChannelId();
   frameHeight = 720;
   fitAfterRender = fitAfter;
@@ -190,9 +343,53 @@ function createRenderer({ fitAfter = true } = {}) {
   clearError();
   applyDimensions();
 
-  showOverlay(`Loading Mermaid ${version}…`);
-  setStatus(`Loading Mermaid ${version}…`, "waiting");
-  setDiagnostics(`Creating sandbox · Mermaid ${version}`);
+  showOverlay(`Preparing Mermaid ${version}…`);
+  setStatus(`Preparing Mermaid ${version}…`, "waiting");
+  setIntegrityStatus(
+    coverage.fullyCovered ? "checking" : INTEGRITY_UNVERIFIED,
+    coverage.fullyCovered ? "Checking integrity…" : "⚠️ Integrity unverified",
+  );
+  setDiagnostics(`Downloading executable stack · Mermaid ${version} · ${layoutLabel(layout)}`);
+
+  try {
+    const artifacts = await prepareArtifacts(version, layout, coverage);
+
+    if (requestId !== rendererRequestId) {
+      return;
+    }
+
+    currentArtifacts = artifacts;
+    setIntegrityStatus(
+      coverage.fullyCovered ? INTEGRITY_VERIFIED : INTEGRITY_UNVERIFIED,
+      coverage.fullyCovered ? "✅ Integrity verified" : "⚠️ Integrity unverified",
+    );
+  } catch (error) {
+    if (requestId !== rendererRequestId) {
+      return;
+    }
+
+    rendererReady = false;
+    currentRendererVersion = null;
+    const integrityFailure = error.cause?.code === LOAD_INTEGRITY_ERROR;
+    setIntegrityStatus(
+      integrityFailure ? INTEGRITY_FAILED : INTEGRITY_UNVERIFIED,
+      integrityFailure
+        ? "❌ Integrity verification failed"
+        : "⚠️ Download failed",
+    );
+    setStatus(
+      integrityFailure ? "Execution blocked" : "Executable download failed",
+      "error",
+    );
+    setDiagnostics(
+      integrityFailure
+        ? `Integrity mismatch · Mermaid ${version} · execution blocked`
+        : `Network failure · Mermaid ${version}`,
+    );
+    showError(error.message);
+    showOverlay(integrityFailure ? "Execution blocked by integrity policy." : error.message);
+    return;
+  }
 
   const url = new URL("./renderer.html", window.location.href);
   url.searchParams.set("channel", channel);
@@ -241,7 +438,9 @@ function sendRender({ fitAfter = false } = {}) {
     return;
   }
 
-  if (version !== currentRendererVersion) {
+  const layout = normaliseLayout(layoutSelect.value);
+
+  if (version !== currentRendererVersion || layout !== currentRendererLayout) {
     createRenderer({ fitAfter });
     return;
   }
@@ -253,7 +452,6 @@ function sendRender({ fitAfter = false } = {}) {
 
   persistSettings();
 
-  const layout = normaliseLayout(layoutSelect.value);
   const theme = mermaidTheme(themeSelect.value);
 
   const layoutName = layoutLabel(layout);
@@ -272,6 +470,10 @@ function sendRender({ fitAfter = false } = {}) {
       mermaidSource: editor.value,
       theme,
       layout,
+      artifacts: rendererArtifactsReady ? null : currentArtifacts,
+      unverifiedConsentVersion: hasVersionConsent(consent, version)
+        ? version
+        : null,
     },
     "*",
   );
@@ -318,6 +520,17 @@ window.addEventListener("message", (event) => {
     return;
   }
 
+  if (message.type === "progress") {
+    const phase = message.value?.phase || "Preparing renderer";
+    setDiagnostics(`${phase} · sandboxed execution`);
+    return;
+  }
+
+  if (message.type === "artifacts-ready") {
+    rendererArtifactsReady = true;
+    return;
+  }
+
   if (message.type === "cleared") {
     clearPreview({ notifyRenderer: false });
     return;
@@ -338,13 +551,23 @@ window.addEventListener("message", (event) => {
     const renderedLayoutName = layoutLabel(renderedLayout);
     const layoutPackage = message.value?.layoutPackage;
     const packageSuffix = layoutPackage ? ` · ${layoutPackage}` : "";
+    const integrity = message.value?.integrity === INTEGRITY_VERIFIED
+      ? INTEGRITY_VERIFIED
+      : INTEGRITY_UNVERIFIED;
+
+    setIntegrityStatus(
+      integrity,
+      integrity === INTEGRITY_VERIFIED
+        ? "✅ Integrity verified"
+        : "⚠️ Integrity unverified",
+    );
 
     setStatus(
       `Rendered · Mermaid ${message.version} · ${renderedLayoutName}`,
       "ready",
     );
     setDiagnostics(
-      `Rendered · Mermaid ${message.version} · ${renderedLayoutName}${packageSuffix} · ${renderWidthPx()}px × ${frameHeight}px`,
+      `Rendered · Mermaid ${message.version} · ${renderedLayoutName}${packageSuffix} · integrity ${integrity.toUpperCase()} · ${renderWidthPx()}px × ${frameHeight}px`,
     );
 
     if (fitAfterRender) {
@@ -358,9 +581,25 @@ window.addEventListener("message", (event) => {
   if (message.type === "error") {
     clearRenderTimeout();
     hideOverlay();
+    const code = message.value?.code || "renderer-error";
+    const integrityFailure = code === LOAD_INTEGRITY_ERROR;
     showError(message.value?.message || "Unknown Mermaid rendering error");
-    setStatus("Mermaid render failed", "error");
-    setDiagnostics(`Renderer error · Mermaid ${message.version}`);
+    setStatus(
+      integrityFailure
+        ? "Execution blocked"
+        : code === "layout-error"
+          ? "Layout package failed"
+          : code === "mermaid-load-error"
+            ? "Mermaid runtime failed to load"
+          : "Mermaid render failed",
+      "error",
+    );
+    if (integrityFailure) {
+      setIntegrityStatus(INTEGRITY_FAILED, "❌ Integrity verification failed");
+    }
+    setDiagnostics(
+      `${integrityFailure ? "Integrity mismatch" : code} · Mermaid ${message.version}`,
+    );
   }
 });
 
@@ -380,9 +619,55 @@ editor.addEventListener("keydown", (event) => {
   }
 });
 
+versionInput.addEventListener("input", () => {
+  consent = clearConsentForVersionChange(consent, versionInput.value);
+  invalidateRenderer();
+  hideUnverifiedWarning();
+
+  try {
+    const version = validateMermaidVersion(versionInput.value);
+    const coverage = integrityCoverage(version, normaliseLayout(layoutSelect.value));
+    setIntegrityStatus(
+      coverage.fullyCovered ? "checking" : INTEGRITY_UNVERIFIED,
+      coverage.fullyCovered ? "Checking integrity…" : "⚠️ Integrity unverified",
+    );
+    setDiagnostics(`Version changed · Mermaid ${version} · execution stopped`);
+  } catch {
+    setIntegrityStatus(INTEGRITY_UNVERIFIED, "⚠️ Invalid version");
+    setDiagnostics("Invalid Mermaid semantic version · execution stopped");
+  }
+});
 versionInput.addEventListener("change", () => createRenderer({ fitAfter: true }));
 themeSelect.addEventListener("change", () => sendRender({ fitAfter: true }));
 layoutSelect.addEventListener("change", () => sendRender({ fitAfter: true }));
+
+integrityConsent.addEventListener("change", () => {
+  continueUnverified.disabled = !canContinueUnverified({
+    checkboxChecked: integrityConsent.checked,
+    requestedVersion: pendingUnverifiedVersion,
+  });
+});
+
+cancelUnverified.addEventListener("click", () => {
+  hideUnverifiedWarning();
+  setStatus("Unverified execution cancelled", "waiting");
+  setDiagnostics("Unverified executable was not downloaded");
+  showOverlay("Unverified execution cancelled.");
+});
+
+continueUnverified.addEventListener("click", () => {
+  if (!canContinueUnverified({
+    checkboxChecked: integrityConsent.checked,
+    requestedVersion: pendingUnverifiedVersion,
+  })) {
+    return;
+  }
+
+  const approvedVersion = pendingUnverifiedVersion;
+  consent = approveVersion(consent, approvedVersion);
+  hideUnverifiedWarning();
+  createRenderer({ fitAfter: true });
+});
 
 widthInput.addEventListener("change", () => {
   applyDimensions();

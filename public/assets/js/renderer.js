@@ -4,9 +4,10 @@
   const PARENT_MESSAGE_SOURCE = "mermaid-viewer-parent";
   const FRAME_MESSAGE_SOURCE = "mermaid-viewer-renderer";
   const DEFAULT_VERSION = "11.15.0";
-  const ELK_VERSION = "0.2.1";
-  const TIDY_TREE_VERSION = "0.2.2";
-  const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+  const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+  const INTEGRITY_VERIFIED = "verified";
+  const INTEGRITY_UNVERIFIED = "unverified";
+  const INTEGRITY_FAILED = "failed";
   const SUPPORTED_LAYOUTS = new Set([
     "elk",
     "tidy-tree",
@@ -21,32 +22,14 @@
     ? requestedVersion
     : DEFAULT_VERSION;
 
-  const mermaidUrls = [
-    `https://cdn.jsdelivr.net/npm/mermaid@${version}/dist/mermaid.esm.min.mjs`,
-    `https://unpkg.com/mermaid@${version}/dist/mermaid.esm.min.mjs`,
-  ];
-
-  const externalLayoutPackages = {
-    elk: {
-      displayName: `@mermaid-js/layout-elk ${ELK_VERSION}`,
-      urls: [
-        `https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@${ELK_VERSION}/dist/mermaid-layout-elk.esm.min.mjs`,
-        `https://unpkg.com/@mermaid-js/layout-elk@${ELK_VERSION}/dist/mermaid-layout-elk.esm.min.mjs`,
-      ],
-    },
-    "tidy-tree": {
-      displayName: `@mermaid-js/layout-tidy-tree ${TIDY_TREE_VERSION}`,
-      urls: [
-        `https://cdn.jsdelivr.net/npm/@mermaid-js/layout-tidy-tree@${TIDY_TREE_VERSION}/dist/mermaid-layout-tidy-tree.esm.min.mjs`,
-        `https://unpkg.com/@mermaid-js/layout-tidy-tree@${TIDY_TREE_VERSION}/dist/mermaid-layout-tidy-tree.esm.min.mjs`,
-      ],
-    },
-  };
+  const integrityManifest = globalThis.MERMAID_VIEWER_INTEGRITY_MANIFEST;
 
   const diagram = document.getElementById("diagram");
 
   let mermaid = null;
+  let mermaidIntegrity = null;
   const registeredExternalLayouts = new Set();
+  const layoutIntegrity = new Map();
 
   function post(type, value = null) {
     window.parent.postMessage(
@@ -61,47 +44,162 @@
     );
   }
 
-  async function importFirst(urls, errorMessage) {
-    let lastError = null;
-
-    for (const url of urls) {
-      try {
-        return await import(url);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw lastError || new Error(errorMessage);
+  function integrityError(message) {
+    const error = new Error(message);
+    error.code = "integrity-error";
+    return error;
   }
 
-  async function loadMermaid() {
+  function rendererError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  function hasDigest(record) {
+    return Boolean(
+      record
+        && typeof record.artifact === "string"
+        && /^sha384-[A-Za-z0-9+/]{64}$/.test(record.digest),
+    );
+  }
+
+  function bytesToBase64(bytes) {
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    return btoa(binary);
+  }
+
+  async function matchesDigest(bytes, expectedDigest) {
+    const digest = await crypto.subtle.digest("SHA-384", bytes);
+    return `sha384-${bytesToBase64(new Uint8Array(digest))}` === expectedDigest;
+  }
+
+  async function executeBytes(bytes, label) {
+    if (!(bytes instanceof ArrayBuffer)) {
+      throw new Error(`Missing executable bytes for ${label}`);
+    }
+
+    const blobUrl = URL.createObjectURL(
+      new Blob([bytes], { type: "text/javascript" }),
+    );
+
+    try {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.nonce = "bWVybWFpZC12aWV3ZXItcmVuZGVyZXI=";
+        script.src = blobUrl;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`Unable to execute ${label}`));
+        document.head.append(script);
+      });
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  async function executeVerifiedArtifact(artifact, record, label) {
+    if (!(artifact?.bytes instanceof ArrayBuffer)) {
+      throw rendererError(`Missing executable bytes for ${label}`, "artifact-error");
+    }
+
+    if (!record?.digest || !await matchesDigest(artifact.bytes, record.digest)) {
+      throw integrityError(
+        `${label} does not match the integrity value trusted by Mermaid Viewer. Execution has been blocked.`,
+      );
+    }
+
+    await executeBytes(artifact.bytes, label);
+  }
+
+  async function loadMermaid(artifact, unverifiedConsentVersion) {
     if (mermaid) {
       return mermaid;
     }
 
-    const module = await importFirst(
-      mermaidUrls,
-      `Unable to load Mermaid ${version}`,
-    );
+    const record = integrityManifest?.versions?.[version];
 
-    mermaid = module.default;
+    try {
+      if (hasDigest(record)) {
+        post("progress", { phase: `Verifying Mermaid ${version}` });
+        await executeVerifiedArtifact(artifact, record, `Mermaid ${version}`);
+        mermaidIntegrity = INTEGRITY_VERIFIED;
+      } else {
+        if (unverifiedConsentVersion !== version) {
+          throw integrityError(
+            `Mermaid ${version} has no trusted integrity record and was not approved for unverified execution.`,
+          );
+        }
+
+        post("progress", { phase: `Executing unverified Mermaid ${version}` });
+        await executeBytes(artifact?.bytes, `unverified Mermaid ${version}`);
+        mermaidIntegrity = INTEGRITY_UNVERIFIED;
+      }
+    } catch (error) {
+      if (error.code !== "integrity-error") {
+        error.code = "mermaid-load-error";
+      }
+      throw error;
+    }
+
+    mermaid = globalThis.mermaid;
+    if (!mermaid?.initialize || !mermaid?.render) {
+      throw rendererError(
+        `Mermaid ${version} did not expose the expected browser API`,
+        "mermaid-load-error",
+      );
+    }
     return mermaid;
   }
 
-  async function ensureExternalLayoutRegistered(layout) {
-    const definition = externalLayoutPackages[layout];
+  async function ensureExternalLayoutRegistered(
+    layout,
+    artifact,
+    unverifiedConsentVersion,
+  ) {
+    const definition = integrityManifest?.layouts?.[layout];
 
-    if (!definition || registeredExternalLayouts.has(layout)) {
+    if (definition?.builtIn || registeredExternalLayouts.has(layout)) {
       return;
     }
 
-    const module = await importFirst(
-      definition.urls,
-      `Unable to load ${definition.displayName}`,
-    );
+    if (!hasDigest(definition)) {
+      if (unverifiedConsentVersion !== version) {
+        throw integrityError(
+          `Layout ${layout} has no trusted integrity record and was not approved for unverified execution.`,
+        );
+      }
 
-    mermaid.registerLayoutLoaders(module.default);
+      await executeBytes(artifact?.bytes, `unverified layout ${layout}`);
+      layoutIntegrity.set(layout, INTEGRITY_UNVERIFIED);
+    } else {
+      const displayName = `${definition.package} ${definition.version}`;
+      post("progress", { phase: `Verifying ${displayName}` });
+      try {
+        await executeVerifiedArtifact(artifact, definition, displayName);
+      } catch (error) {
+        if (error.code !== "integrity-error") {
+          error.code = "layout-error";
+        }
+        throw error;
+      }
+
+      layoutIntegrity.set(layout, INTEGRITY_VERIFIED);
+    }
+
+    const displayName = `${definition.package} ${definition.version}`;
+    const loaders = globalThis.mermaidViewerLayouts?.[layout];
+
+    if (!loaders) {
+      throw rendererError(
+        `${displayName} did not expose the expected layout API`,
+        "layout-error",
+      );
+    }
+
+    mermaid.registerLayoutLoaders(loaders);
     registeredExternalLayouts.add(layout);
   }
 
@@ -109,8 +207,48 @@
     return SUPPORTED_LAYOUTS.has(value) ? value : "elk";
   }
 
+  function diagramType(source) {
+    const withoutFrontmatter = source.replace(/^\s*---[\s\S]*?---\s*/u, "");
+    const firstContentLine = withoutFrontmatter
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("%%"));
+
+    return firstContentLine?.split(/\s/u, 1)[0]?.toLowerCase() || "";
+  }
+
+  function assertLayoutCompatibility(source, layout) {
+    const type = diagramType(source);
+
+    if (
+      (layout === "tidy-tree" || layout === "cose-bilkent")
+      && (type === "flowchart" || type === "graph")
+    ) {
+      const displayName = layout === "tidy-tree" ? "Tidy Tree" : "Cose Bilkent";
+      throw rendererError(
+        `${displayName} cannot lay out flowchart diagrams in Mermaid ${version}. Use ELK or Dagre for this source, or change the diagram to mindmap syntax.`,
+        "layout-error",
+      );
+    }
+  }
+
   function layoutPackage(layout) {
-    return externalLayoutPackages[layout]?.displayName || null;
+    const definition = integrityManifest?.layouts?.[layout];
+    return definition?.package
+      ? `${definition.package} ${definition.version}`
+      : null;
+  }
+
+  function overallIntegrity(layout) {
+    const definition = integrityManifest?.layouts?.[layout];
+    const selectedLayoutIntegrity = definition?.builtIn
+      ? mermaidIntegrity
+      : layoutIntegrity.get(layout);
+
+    return mermaidIntegrity === INTEGRITY_VERIFIED
+      && selectedLayoutIntegrity === INTEGRITY_VERIFIED
+      ? INTEGRITY_VERIFIED
+      : INTEGRITY_UNVERIFIED;
   }
 
   function measureHeight() {
@@ -136,6 +274,7 @@
       theme,
       layout,
       logLevel: "fatal",
+      suppressErrorRendering: true,
     };
 
     // Mermaid v11 supports top-level `layout`. Retain the older flowchart
@@ -163,12 +302,22 @@
     }
 
     try {
-      await loadMermaid();
-
       const layout = normaliseLayout(message.layout);
       const theme = message.theme === "dark" ? "dark" : "default";
 
-      await ensureExternalLayoutRegistered(layout);
+      assertLayoutCompatibility(source, layout);
+
+      await loadMermaid(
+        message.artifacts?.mermaid,
+        message.unverifiedConsentVersion,
+      );
+      await ensureExternalLayoutRegistered(
+        layout,
+        message.artifacts?.layout,
+        message.unverifiedConsentVersion,
+      );
+      post("artifacts-ready", { integrity: overallIntegrity(layout) });
+      post("progress", { phase: `Rendering with Mermaid ${version}` });
 
       mermaid.initialize(
         createMermaidConfig({
@@ -179,22 +328,35 @@
 
       const renderId = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const result = await mermaid.render(renderId, source);
+      post("progress", { phase: `Mermaid ${version} render complete` });
 
       diagram.innerHTML = result.svg;
       result.bindFunctions?.(diagram);
 
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          post("rendered", {
-            height: measureHeight(),
-            layout,
-            layoutPackage: layoutPackage(layout),
-          });
+      let reported = false;
+      const reportRendered = () => {
+        if (reported) {
+          return;
+        }
+
+        reported = true;
+        post("rendered", {
+          height: measureHeight(),
+          layout,
+          layoutPackage: layoutPackage(layout),
+          integrity: overallIntegrity(layout),
         });
-      });
+      };
+
+      requestAnimationFrame(() => requestAnimationFrame(reportRendered));
+      window.setTimeout(reportRendered, 100);
     } catch (error) {
       post("error", {
         message: error?.message || String(error),
+        code: error?.code || "renderer-error",
+        integrity: error?.code === "integrity-error"
+          ? INTEGRITY_FAILED
+          : overallIntegrity(normaliseLayout(message.layout)),
       });
     }
   }

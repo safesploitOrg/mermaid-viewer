@@ -13,8 +13,29 @@ Mermaid is initialised with `securityLevel: "strict"`.
 
 Parent/renderer `postMessage` traffic is scoped with a random per-renderer channel ID and accepted only from the expected iframe window.
 
-The renderer downloads pinned/version-selected JavaScript modules from jsDelivr, with unpkg as a fallback. This includes Mermaid and, when selected, the optional ELK or Tidy Tree layout package. Dagre and Cose Bilkent are provided by Mermaid's full ESM build.
+## Executable integrity model
 
-The Mermaid source itself is rendered locally in the browser and is not intentionally submitted to a remote rendering API. Public CDNs remain part of the application's software supply chain.
+The repository contains single-file browser bundles and SHA-384 digests for Mermaid `11.15.0`, `@mermaid-js/layout-elk` `0.2.1`, and `@mermaid-js/layout-tidy-tree` `0.2.2`. Dagre and Cose Bilkent are included in the Mermaid bundle. A rendering session is labelled **verified** only after Mermaid and every external package required by the selected layout match the repository-controlled digests.
+
+The parent page fetches and checks the bytes with Web Crypto. It then passes those bytes into the sandbox, where the renderer checks the digest again before executing a Blob-backed classic script. A known digest mismatch is a hard failure and cannot be bypassed.
+
+Unknown but syntactically valid Mermaid versions remain available for compatibility testing. They are not downloaded until the user checks the warning acknowledgement and continues. That consent applies only to the selected version, is cleared when the version changes, and is not persisted. jsDelivr is tried first and unpkg is the network fallback. CDN fallback does not improve or change the **unverified** state.
+
+Integrity checking protects against an artefact that differs from the bytes approved in this repository, including CDN or transit modification. It does not protect against:
+
+- compromise that changes both this repository's manifest and its bundles;
+- malicious or vulnerable code already present in an approved upstream release;
+- browser/runtime compromise; or
+- risks inherent in explicitly approved, unverified versions.
+
+Exact npm versions are pinned and `package-lock.json` records npm registry integrity. CI reproduces the bundles and compares them byte-for-byte with the committed artefacts.
+
+## Content Security Policy
+
+The parent permits network connections only to its own origin, jsDelivr, and unpkg. Because the renderer has an opaque sandbox origin, its static bootstrap script tags carry a CSP nonce; `strict-dynamic` and `blob:` then permit the trusted bootstrap to execute the checked bytes. The nonce is static because this is a static site, so it is an execution allow-list rather than a server-generated injection defence.
+
+Neither policy permits `unsafe-eval`, and `script-src` does not permit `unsafe-inline`. The renderer's `style-src` does allow inline styles because Mermaid generates diagram-specific SVG `<style>` elements and style attributes at runtime. Blocking those styles causes incorrect black/default SVG rendering. This exception is confined to the opaque, script-sandboxed renderer; its CSP still prevents stylesheet URLs and other resource types from reaching external origins.
+
+The Mermaid source itself is rendered locally in the browser and is not intentionally submitted to a remote rendering API. CDNs are part of the supply chain only when the user explicitly chooses an unverified Mermaid version.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full runtime and trust-boundary model.

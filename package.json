@@ -5,10 +5,18 @@
   "description": "Static Mermaid previewer for comparing ELK, Tidy Tree, Cose Bilkent and Dagre layouts with zoom, pan and GitHub Pages deployment.",
   "type": "module",
   "scripts": {
+    "vendor:externals": "node scripts/vendor-externals.mjs",
+    "vendor:check": "node scripts/vendor-externals.mjs --check",
     "test": "node --test tests/*.test.js",
-    "check": "npm test"
+    "check": "npm run vendor:check && npm test"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@mermaid-js/layout-elk": "0.2.1",
+    "@mermaid-js/layout-tidy-tree": "0.2.2",
+    "esbuild": "0.28.2",
+    "mermaid": "11.15.0"
   }
 }

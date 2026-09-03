@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Mermaid Viewer</title>
   <link rel="stylesheet" href="./assets/css/app.css">
   <link rel="icon" type="image/x-icon" href="./assets/favicon/mermaid-64.png">
@@ -20,10 +20,15 @@
         id="version"
         type="text"
         value="11.15.0"
+        list="knownMermaidVersions"
         spellcheck="false"
         aria-label="Mermaid version"
       >
+      <datalist id="knownMermaidVersions">
+        <option value="11.15.0">Integrity metadata available</option>
+      </datalist>
     </label>
+    <span id="integrityStatus" class="integrity-status checking" aria-live="polite">Checking integrity…</span>
 
     <label>
       Theme
@@ -71,12 +76,17 @@
 
   <main class="workspace">
     <section class="editor-pane" aria-label="Mermaid source editor">
-      <textarea id="editor" spellcheck="false" aria-label="Mermaid source">flowchart LR
+      <textarea id="editor" spellcheck="false" aria-label="Mermaid source">
+flowchart LR
 
     DEV["👩‍💻 Developer"]
     GIT["Git Repository"]
 
-    subgraph PIPELINE["🔐 CI / Security Pipeline"]
+    %% ============================================================
+    %% CONTINUOUS INTEGRATION
+    %% ============================================================
+
+    subgraph CI["🔵 Continuous Integration"]
         direction TB
 
         TEST["✅ Unit Tests"]
@@ -89,20 +99,43 @@
         DEPS --> BUILD
     end
 
-    REGISTRY["📦 Artifact Registry"]
-    STAGING["🧪 Staging"]
-    PROD["🚀 Production"]
+    %% ============================================================
+    %% CONTINUOUS DELIVERY / DEPLOYMENT
+    %% ============================================================
+
+    subgraph CD["🟢 Continuous Delivery"]
+        direction TB
+
+        REGISTRY["📦 Artifact Registry"]
+        STAGING["🧪 Staging"]
+        PROD["🚀 Production"]
+
+        REGISTRY --> STAGING
+        STAGING --> PROD
+    end
+
+    %% ============================================================
+    %% PIPELINE FLOW
+    %% ============================================================
 
     DEV --> GIT
+
     GIT --> TEST
     GIT --> SAST
     GIT --> DEPS
 
     BUILD --> REGISTRY
-    REGISTRY --> STAGING
-    STAGING --> PROD
 
-    style PIPELINE fill:#e7f1ff,stroke:#2864a8,stroke-width:2px</textarea>
+    %% ============================================================
+    %% BOUNDARY STYLING
+    %% ============================================================
+
+    %% CI - blue security/build boundary
+    style CI fill:#dbeafe,stroke:#2563eb,stroke-width:3px,color:#172554
+
+    %% CD - green release/deployment boundary
+    style CD fill:#dcfce7,stroke:#16a34a,stroke-width:3px,color:#052e16
+            </textarea>
     </section>
 
     <section class="preview-pane" id="previewPane" aria-label="Mermaid preview">
@@ -130,6 +163,22 @@
       </div>
     </section>
   </main>
+
+  <div id="integrityDialog" class="dialog-backdrop" hidden>
+    <section class="integrity-dialog" role="dialog" aria-modal="true" aria-labelledby="integrityDialogTitle" aria-describedby="integrityDialogDescription">
+      <h2 id="integrityDialogTitle">⚠️ Integrity could not be verified</h2>
+      <p id="integrityDialogDescription"></p>
+      <p>Continuing will download and execute JavaScript from an external CDN without Mermaid Viewer being able to verify its integrity. Only continue if you trust the selected Mermaid version and the external source.</p>
+      <label class="consent-label">
+        <input id="integrityConsent" type="checkbox">
+        <span>I understand that this version cannot be integrity-verified.</span>
+      </label>
+      <div class="dialog-actions">
+        <button id="cancelUnverified" type="button">Cancel</button>
+        <button id="continueUnverified" class="primary" type="button" disabled>Continue with unverified version</button>
+      </div>
+    </section>
+  </div>
 
   <footer class="app-footer">
     <span>&copy; <span id="copyrightYear"></span> Mermaid Viewer</span>
