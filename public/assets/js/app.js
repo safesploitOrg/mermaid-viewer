@@ -9,7 +9,9 @@ import {
   layoutLabel,
   mermaidTheme,
   normaliseLayout,
+  normaliseLayoutMode,
   normaliseTheme,
+  resolveLayoutForRender,
   validateMermaidVersion,
 } from "./core.js";
 
@@ -44,12 +46,15 @@ const RENDER_TIMEOUT_MS = 10000;
 const MINIMUM_FRAME_HEIGHT = 240;
 const CUSTOM_VERSION_OPTION = "custom";
 const REMEMBERED_APPROVALS_KEY = "mermaid-viewer-unverified-approvals";
+const LAYOUT_MODE_KEY = "mermaid-viewer-layout-mode";
 
 const editor = document.getElementById("editor");
 const versionInput = document.getElementById("version");
 const versionPreset = document.getElementById("versionPreset");
 const themeSelect = document.getElementById("theme");
 const layoutSelect = document.getElementById("layout");
+const autoDetectLayoutButton = document.getElementById("autoDetectLayout");
+const layoutStatus = document.getElementById("layoutStatus");
 const widthInput = document.getElementById("renderWidth");
 const liveToggle = document.getElementById("live");
 
@@ -90,6 +95,7 @@ let consent = { approvedVersion: null };
 let rememberedVersionApprovals = [];
 let pendingUnverifiedVersion = null;
 let rendererRequestId = 0;
+let layoutMode = DEFAULTS.layoutMode;
 
 let dragging = false;
 let dragPointer = null;
@@ -203,11 +209,75 @@ function startRenderTimeout() {
   }, RENDER_TIMEOUT_MS);
 }
 
+function updateLayoutStatus(resolution) {
+  const auto = resolution.mode === "auto";
+  autoDetectLayoutButton.setAttribute("aria-pressed", String(auto));
+  autoDetectLayoutButton.classList.toggle("active", auto);
+
+  layoutStatus.className = "layout-status";
+
+  if (!auto) {
+    layoutStatus.classList.add("forced");
+    layoutStatus.textContent = `FORCED · ${layoutLabel(resolution.layout)}`;
+    layoutStatus.title = "The preview uses the selected layout even if the source frontmatter requests another layout. The editor text is not modified.";
+    return;
+  }
+
+  if (resolution.detection.status === "unsupported") {
+    layoutStatus.classList.add("error");
+    layoutStatus.textContent = `AUTO · unsupported: ${resolution.detection.raw || "unknown"}`;
+    layoutStatus.title = "The Mermaid frontmatter requests a layout this viewer does not support.";
+    return;
+  }
+
+  if (resolution.detection.status === "detected") {
+    layoutStatus.classList.add("detected");
+    layoutStatus.textContent = `AUTO · source: ${layoutLabel(resolution.layout)}`;
+    layoutStatus.title = `Detected from ${resolution.detection.source}.`;
+    return;
+  }
+
+  layoutStatus.classList.add("fallback");
+  layoutStatus.textContent = `AUTO · no source layout · ${layoutLabel(DEFAULTS.layout)} fallback`;
+  layoutStatus.title = "No supported layout directive was found in Mermaid frontmatter, so the viewer uses its ELK fallback.";
+}
+
+function resolveCurrentLayout() {
+  const resolution = resolveLayoutForRender({
+    source: editor.value,
+    mode: layoutMode,
+    selectedLayout: layoutSelect.value,
+  });
+
+  if (resolution.mode === "auto" && resolution.layout) {
+    layoutSelect.value = resolution.layout;
+  }
+
+  updateLayoutStatus(resolution);
+  return resolution;
+}
+
+function assertResolvedLayout(resolution) {
+  if (resolution.layout) {
+    return true;
+  }
+
+  const raw = resolution.detection.raw || "unknown";
+  const message = `Unsupported Mermaid layout \"${raw}\" in frontmatter. Choose a supported layout manually to force the preview, or update config.layout in the source.`;
+
+  showError(message);
+  setStatus("Unsupported source layout", "error");
+  setDiagnostics(`Auto-detect blocked · unsupported source layout ${raw}`);
+  showOverlay("Auto-detect cannot render an unsupported frontmatter layout.");
+  return false;
+}
+
 function persistSettings() {
   localStorage.setItem("mermaid-viewer-source", editor.value);
   localStorage.setItem("mermaid-viewer-version", validateMermaidVersion(versionInput.value));
   localStorage.setItem("mermaid-viewer-theme", normaliseTheme(themeSelect.value));
   localStorage.setItem("mermaid-viewer-layout", normaliseLayout(layoutSelect.value));
+  localStorage.setItem(LAYOUT_MODE_KEY, normaliseLayoutMode(layoutMode));
   localStorage.setItem("mermaid-viewer-width", String(renderWidthPx()));
 }
 
@@ -352,7 +422,14 @@ async function createRenderer({ fitAfter = true } = {}) {
   }
 
   versionInput.value = version;
-  const layout = normaliseLayout(layoutSelect.value);
+  const resolution = resolveCurrentLayout();
+
+  if (!assertResolvedLayout(resolution)) {
+    invalidateRenderer();
+    return;
+  }
+
+  const layout = resolution.layout;
   const coverage = integrityCoverage(version, layout);
 
   if (!coverage.fullyCovered && !hasApprovedVersion(version)) {
@@ -473,7 +550,12 @@ function sendRender({ fitAfter = false } = {}) {
     return;
   }
 
-  const layout = normaliseLayout(layoutSelect.value);
+  const resolution = resolveCurrentLayout();
+  if (!assertResolvedLayout(resolution)) {
+    return;
+  }
+
+  const layout = resolution.layout;
 
   if (version !== currentRendererVersion || layout !== currentRendererLayout) {
     createRenderer({ fitAfter });
@@ -488,13 +570,13 @@ function sendRender({ fitAfter = false } = {}) {
   persistSettings();
 
   const theme = mermaidTheme(themeSelect.value);
-
   const layoutName = layoutLabel(layout);
+  const layoutContext = resolution.mode === "auto" ? "auto" : "forced";
 
   showOverlay(`Rendering with Mermaid ${version} · ${layoutName}…`);
   setStatus(`Rendering Mermaid ${version} · ${layoutName}…`, "waiting");
   setDiagnostics(
-    `Sent source to sandbox · Mermaid ${version} · ${layoutName} · ${renderWidthPx()}px`,
+    `Sent source to sandbox · Mermaid ${version} · ${layoutName} · ${layoutContext} · ${renderWidthPx()}px`,
   );
 
   iframe.contentWindow.postMessage(
@@ -502,7 +584,7 @@ function sendRender({ fitAfter = false } = {}) {
       source: PARENT_MESSAGE_SOURCE,
       channel,
       type: "render",
-      mermaidSource: editor.value,
+      mermaidSource: resolution.mermaidSource,
       theme,
       layout,
       artifacts: rendererArtifactsReady ? null : currentArtifacts,
@@ -517,6 +599,10 @@ function sendRender({ fitAfter = false } = {}) {
 }
 
 function scheduleRender() {
+  if (layoutMode === "auto") {
+    resolveCurrentLayout();
+  }
+
   if (isBlankSource(editor.value)) {
     clearPreview();
     return;
@@ -602,7 +688,7 @@ window.addEventListener("message", (event) => {
       "ready",
     );
     setDiagnostics(
-      `Rendered · Mermaid ${message.version} · ${renderedLayoutName}${packageSuffix} · integrity ${integrity.toUpperCase()} · ${renderWidthPx()}px × ${frameHeight}px`,
+      `Rendered · Mermaid ${message.version} · ${renderedLayoutName}${packageSuffix} · ${normaliseLayoutMode(layoutMode).toUpperCase()} · integrity ${integrity.toUpperCase()} · ${renderWidthPx()}px × ${frameHeight}px`,
     );
 
     if (fitAfterRender) {
@@ -626,7 +712,7 @@ window.addEventListener("message", (event) => {
           ? "Layout package failed"
           : code === "mermaid-load-error"
             ? "Mermaid runtime failed to load"
-          : "Mermaid render failed",
+            : "Mermaid render failed",
       "error",
     );
     if (integrityFailure) {
@@ -661,7 +747,9 @@ function handleVersionChange() {
 
   try {
     const version = validateMermaidVersion(versionInput.value);
-    const coverage = integrityCoverage(version, normaliseLayout(layoutSelect.value));
+    const resolution = resolveCurrentLayout();
+    const layout = resolution.layout ?? DEFAULTS.layout;
+    const coverage = integrityCoverage(version, layout);
     setIntegrityStatus(
       coverage.fullyCovered ? "checking" : INTEGRITY_UNVERIFIED,
       coverage.fullyCovered ? "Checking integrity…" : "⚠️ Integrity unverified",
@@ -698,7 +786,24 @@ versionPreset.addEventListener("change", () => {
 });
 
 themeSelect.addEventListener("change", () => sendRender({ fitAfter: true }));
-layoutSelect.addEventListener("change", () => sendRender({ fitAfter: true }));
+
+layoutSelect.addEventListener("change", () => {
+  layoutMode = "forced";
+  resolveCurrentLayout();
+  sendRender({ fitAfter: true });
+});
+
+autoDetectLayoutButton.addEventListener("click", () => {
+  layoutMode = "auto";
+  const resolution = resolveCurrentLayout();
+
+  if (!assertResolvedLayout(resolution)) {
+    return;
+  }
+
+  clearError();
+  sendRender({ fitAfter: true });
+});
 
 integrityConsent.addEventListener("change", () => {
   continueUnverified.disabled = !canContinueUnverified({
@@ -740,6 +845,9 @@ document.getElementById("render").addEventListener("click", () => sendRender({ f
 
 document.getElementById("resetExample").addEventListener("click", () => {
   editor.value = defaultExample;
+  if (layoutMode === "auto") {
+    resolveCurrentLayout();
+  }
   sendRender({ fitAfter: true });
 });
 
@@ -835,6 +943,7 @@ function restoreSettings() {
   const savedVersion = localStorage.getItem("mermaid-viewer-version");
   const savedTheme = localStorage.getItem("mermaid-viewer-theme");
   const savedLayout = localStorage.getItem("mermaid-viewer-layout");
+  const savedLayoutMode = localStorage.getItem(LAYOUT_MODE_KEY);
   const savedWidth = localStorage.getItem("mermaid-viewer-width");
   rememberedVersionApprovals = parseRememberedVersionApprovals(
     localStorage.getItem(REMEMBERED_APPROVALS_KEY),
@@ -856,7 +965,17 @@ function restoreSettings() {
 
   themeSelect.value = normaliseTheme(savedTheme || DEFAULTS.theme);
   layoutSelect.value = normaliseLayout(savedLayout || DEFAULTS.layout);
+
+  // Existing v1.2 users already have a saved layout but no mode. Preserve
+  // that selection as forced. Fresh users default to auto-detect with ELK fallback.
+  layoutMode = savedLayoutMode
+    ? normaliseLayoutMode(savedLayoutMode)
+    : savedLayout !== null
+      ? "forced"
+      : DEFAULTS.layoutMode;
+
   widthInput.value = String(clampRenderWidth(savedWidth || DEFAULTS.renderWidth));
+  resolveCurrentLayout();
 }
 
 setFooterYear();

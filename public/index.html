@@ -12,7 +12,7 @@
 <body>
   <header class="app-header">
     <div class="brand">Mermaid Viewer</div>
-    <div class="badge">4 layouts · ELK default</div>
+    <div class="badge">4 layouts · Auto-detect · ELK fallback</div>
 
     <label>
       Mermaid
@@ -43,7 +43,7 @@
       </select>
     </label>
 
-    <label title="Compare Mermaid's supported layout algorithms using the same source.">
+    <label title="Select a layout manually to force it in the preview. Auto-detect reads config.layout from Mermaid frontmatter.">
       Layout
       <select id="layout" aria-label="Layout engine">
         <option value="elk" selected>ELK — layered / orthogonal</option>
@@ -52,6 +52,14 @@
         <option value="dagre">Dagre — layered / Mermaid default</option>
       </select>
     </label>
+    <button
+      id="autoDetectLayout"
+      class="layout-auto-button active"
+      type="button"
+      aria-pressed="true"
+      title="Use config.layout from Mermaid frontmatter. If none is present, use the viewer's ELK fallback."
+    >Auto-detect</button>
+    <span id="layoutStatus" class="layout-status fallback" aria-live="polite">AUTO · no source layout · ELK fallback</span>
 
     <label title="Width used by the sandboxed renderer before viewer zoom is applied.">
       Render width
@@ -82,6 +90,10 @@
   <main class="workspace">
     <section class="editor-pane" aria-label="Mermaid source editor">
       <textarea id="editor" spellcheck="false" aria-label="Mermaid source">
+---
+config:
+  layout: Dagre
+---
 flowchart LR
 
     DEV["👩‍💻 Developer"]

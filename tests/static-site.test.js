@@ -5,6 +5,7 @@ import { access, readFile } from "node:fs/promises";
 const INDEX_PATH = new URL("../public/index.html", import.meta.url);
 const RENDERER_PATH = new URL("../public/renderer.html", import.meta.url);
 const APP_JS_PATH = new URL("../public/assets/js/app.js", import.meta.url);
+const CORE_JS_PATH = new URL("../public/assets/js/core.js", import.meta.url);
 const RENDERER_JS_PATH = new URL("../public/assets/js/renderer.js", import.meta.url);
 const GITHUB_ICON_PATH = new URL("../public/assets/images/github-mark.svg", import.meta.url);
 const NOJEKYLL_PATH = new URL("../public/.nojekyll", import.meta.url);
@@ -24,13 +25,34 @@ test("GitHub Pages entrypoint references split CSS and JavaScript assets", async
   assert.match(html, /\.\/assets\/js\/app\.js/);
 });
 
-test("layout selector exposes all four supported layouts with ELK as default", async () => {
+test("layout selector exposes all four layouts and Auto-detect defaults to ELK fallback", async () => {
   const html = await readFile(INDEX_PATH, "utf8");
+  const appSource = await readFile(APP_JS_PATH, "utf8");
+  const coreSource = await readFile(CORE_JS_PATH, "utf8");
 
   assert.match(html, /value="elk" selected/);
   assert.match(html, /value="tidy-tree"/);
   assert.match(html, /value="cose-bilkent"/);
   assert.match(html, /value="dagre"/);
+  assert.match(html, /id="autoDetectLayout"/);
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /id="layoutStatus"/);
+  assert.match(html, /AUTO · no source layout · ELK fallback/);
+  assert.match(appSource, /resolveLayoutForRender/);
+  assert.match(appSource, /mermaid-viewer-layout-mode/);
+  assert.match(coreSource, /layoutMode:\s*"auto"/);
+});
+
+test("manual layout selection is a forced preview and auto mode detects source frontmatter", async () => {
+  const appSource = await readFile(APP_JS_PATH, "utf8");
+  const coreSource = await readFile(CORE_JS_PATH, "utf8");
+
+  assert.match(appSource, /layoutMode = "forced"/);
+  assert.match(appSource, /layoutMode = "auto"/);
+  assert.match(appSource, /mermaidSource: resolution\.mermaidSource/);
+  assert.match(coreSource, /detectFrontmatterLayout/);
+  assert.match(coreSource, /forceFrontmatterLayout/);
+  assert.match(coreSource, /config\.flowchart\.defaultRenderer/);
 });
 
 test("renderer iframe remains sandboxed without same-origin privileges", async () => {
@@ -89,7 +111,7 @@ test("trusted versions have a dropdown and unverified consent can be remembered"
   assert.match(appSource, /mermaid-viewer-unverified-approvals/);
 });
 
-test("public example is the CI/CD security pipeline", async () => {
+test("public example remains the generic CI/CD security pipeline", async () => {
   const html = await readFile(INDEX_PATH, "utf8");
 
   assert.match(html, /subgraph CI\["🔵 Continuous Integration"\]/);
@@ -110,13 +132,13 @@ test("footer uses a browser-derived year and links to the public repository", as
   assert.match(appSource, /browserYear\(\)/);
 });
 
-test("release metadata and changelog identify version 1.2.0", async () => {
+test("release metadata and changelog identify version 1.3.0", async () => {
   const packageMetadata = JSON.parse(await readFile(PACKAGE_PATH, "utf8"));
   const changelog = await readFile(CHANGELOG_PATH, "utf8");
 
-  assert.equal(packageMetadata.version, "1.2.0");
+  assert.equal(packageMetadata.version, "1.3.0");
+  assert.match(changelog, /## \[1\.3\.0\] - 2026-09-28/);
   assert.match(changelog, /## \[1\.2\.0\] - 2026-09-03/);
-  assert.match(changelog, /## \[1\.1\.0\] - 2026-09-03/);
 });
 
 test("renderer page, icon, architecture and GitHub Pages marker exist", async () => {

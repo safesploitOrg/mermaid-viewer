@@ -6,6 +6,31 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-28
+
+### Added
+
+- **Auto-detect layout mode** that reads Mermaid YAML frontmatter such as `config.layout: dagre` and renders with the layout requested by the source.
+- A dedicated **Auto-detect** button and visible layout-state indicator showing detected, fallback, forced and unsupported states.
+- Support for detecting all four viewer layouts from frontmatter: `elk`, `tidy-tree`, `cose-bilkent` and `dagre`.
+- Compatibility detection for legacy flowchart renderer hints through `config.flowchart.defaultRenderer` (`elk` and `dagre-wrapper`).
+- A render-only **forced layout** path: selecting a layout manually overrides source frontmatter for previewing without changing the user's editor text.
+- Unit tests for frontmatter detection, inline configuration, comments, legacy renderer hints, unsupported values, ELK fallback and forced preview behaviour.
+
+### Changed
+
+- New/fresh sessions default to **Auto-detect** rather than permanently forcing the layout selector.
+- When Auto-detect finds no layout directive, Mermaid Viewer continues to use **ELK as its fallback**.
+- Existing v1.2 browser profiles that already stored a manual layout are migrated to **forced mode** so the update does not unexpectedly change their previews.
+- Layout diagnostics now identify whether the result came from `AUTO` or `FORCED` mode.
+- Unsupported frontmatter layouts are surfaced as an explicit error in Auto-detect mode rather than being silently normalised to ELK.
+
+### Security
+
+- Frontmatter inspection uses a narrow parser for the layout keys Mermaid Viewer needs; it does not execute YAML or introduce a general-purpose YAML deserialiser.
+- Manual force mode modifies only an in-memory render copy. The original Mermaid source in the editor is never rewritten automatically.
+- The existing SHA-384 executable-integrity checks, strict Mermaid security mode and sandbox boundary are unchanged.
+
 ## [1.2.0] - 2026-09-03
 
 ### Added
@@ -48,6 +73,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - The renderer iframe omitted `allow-same-origin` and used a per-session channel for parent/renderer messages.
 - Mermaid and optional layout scripts were loaded from public CDNs without repository-owned integrity validation.
 
-[Unreleased]: https://github.com/safesploitOrg/mermaid-viewer/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/safesploitOrg/mermaid-viewer/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/safesploitOrg/mermaid-viewer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/safesploitOrg/mermaid-viewer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/safesploitOrg/mermaid-viewer/releases/tag/v1.1.0
