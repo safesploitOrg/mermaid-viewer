@@ -1,17 +1,18 @@
 # 🏗️ Architecture
 
-This document describes the runtime architecture, security boundaries and layout-loading model used by Mermaid Viewer.
+This document describes Mermaid Viewer's static runtime, security boundaries, integrity model and v1.3 layout-resolution behaviour.
 
 ## Goals
 
-Mermaid Viewer is intentionally a small static application. It is designed to:
+Mermaid Viewer is designed to:
 
 - compare the same Mermaid source under multiple layout algorithms;
-- keep **ELK** as the default layout for compact architecture diagrams;
-- make it easy to compare output before publishing the diagram elsewhere;
-- run without an application server or build step;
-- deploy directly from `public/` to GitHub Pages;
-- keep Mermaid rendering isolated from the editor page.
+- honour an explicit layout stored in Mermaid frontmatter;
+- make the resolved layout visible before publishing elsewhere;
+- use **ELK as the viewer fallback** when the source does not specify a layout;
+- allow manual layout experiments without silently rewriting the source;
+- remain a static GitHub Pages application;
+- keep Mermaid execution isolated from the parent editor page.
 
 ## Runtime overview
 
@@ -21,10 +22,11 @@ flowchart LR
 
     subgraph PARENT[public/index.html]
         EDITOR[Mermaid Editor]
-        CONTROLS[Layout / Theme / Zoom Controls]
+        DETECT[Frontmatter Layout Resolver]
+        CONTROLS[Auto / Force / Theme / Zoom]
         INTEGRITY[Manifest + Web Crypto verification]
-        VIEWPORT[Pan + Zoom Viewport]
         APP[assets/js/app.js]
+        VIEWPORT[Pan + Zoom Viewport]
     end
 
     subgraph SANDBOX[Sandboxed Renderer iframe]
@@ -34,257 +36,202 @@ flowchart LR
         SVG[Rendered SVG]
     end
 
-    LOCAL[Trusted local single-file bundles]
-    CDN[CDNs for consented unknown versions]
-
-    USER --> EDITOR
+    EDITOR --> DETECT
     CONTROLS --> APP
-    EDITOR --> APP
+    DETECT --> APP
     APP --> INTEGRITY
-    LOCAL --> INTEGRITY
-    CDN -. unverified after consent .-> INTEGRITY
-    APP -->|verified/unverified bytes + source + channel ID| RENDERER
+    APP -->|source/render copy + layout + verified bytes| RENDERER
     RENDERER --> MERMAID
     MERMAID --> LAYOUTS
     LAYOUTS --> SVG
     SVG --> VIEWPORT
-    RENDERER -->|rendered / error| APP
-
 ```
 
 ## Application layers
 
 ### Parent application
 
-`public/index.html` contains the editor, controls, viewport and footer.
+`public/assets/js/app.js` controls UI state, integrity preparation, layout resolution, iframe lifecycle, zoom/pan and persistence.
 
-`public/assets/js/app.js` is responsible for:
+`public/assets/js/core.js` contains pure functions for:
 
-- reading UI state;
-- validating the requested Mermaid version;
-- looking up trusted integrity metadata and collecting explicit consent when it is absent;
-- downloading and hashing executable artefacts before passing their bytes to the renderer;
-- selecting one of the supported layouts;
-- persisting settings to `localStorage`;
-- sending render requests to the sandboxed iframe;
-- validating renderer responses;
-- managing zoom, pan, fit and fullscreen behaviour;
-- clearing the preview when the editor contains only whitespace;
-- populating the footer year from the client's browser clock.
-
-Pure, unit-testable calculations and normalisation functions live in `public/assets/js/core.js`. Trusted-version lookup, download handling, consent helpers and digest comparison live in `public/assets/js/integrity.js`. The generated repository-controlled manifest is `public/assets/js/externals/mermaid-integrity.js`.
+- Mermaid semantic-version validation;
+- layout/theme normalisation;
+- zoom and fit calculations;
+- narrow Mermaid frontmatter layout detection;
+- forced render-copy generation; and
+- Auto/Forced layout resolution.
 
 ### Renderer boundary
 
-`public/renderer.html` is loaded in an iframe with:
+The renderer remains in an iframe with:
 
 ```html
 sandbox="allow-scripts"
 ```
 
-`allow-same-origin` is deliberately omitted. This prevents the renderer iframe from being treated as the same origin as the parent page.
+`allow-same-origin` is deliberately omitted. Parent/renderer messages remain bound to the expected iframe window and a random per-session channel ID.
 
-The parent and renderer communicate with `postMessage`. Each renderer session receives a random channel ID. Messages are accepted only when:
-
-- they come from the expected iframe window;
-- they contain the expected source marker; and
-- they contain the active channel ID.
-
-The renderer uses Mermaid with:
+Mermaid continues to initialise with:
 
 ```javascript
 securityLevel: "strict"
 ```
 
-The iframe repeats SHA-384 verification for known artefacts before turning the supplied bytes into a Blob-backed classic script. This avoids granting `allow-same-origin`, avoids `eval()`/`new Function()`, and avoids the incomplete protection that would result from checking only an ESM entry point while allowing unchecked imported chunks.
+The v1.3 layout feature does not weaken the v1.2 executable-integrity model.
 
-## Layout engine model
+## Layout resolution
 
-The layout selector exposes the four layouts documented by Mermaid:
+Mermaid Viewer now has two layout modes.
 
-| Layout | Purpose | Loading model |
-| --- | --- | --- |
-| `elk` | Layered/orthogonal layout, especially useful for architecture diagrams | External `@mermaid-js/layout-elk` package |
-| `tidy-tree` | Hierarchical/tree-oriented layout | External `@mermaid-js/layout-tidy-tree` package |
-| `cose-bilkent` | Force-directed graph layout | Included in Mermaid's full browser bundle |
-| `dagre` | Layered graph layout and Mermaid's traditional default | Included in Mermaid |
+### Auto-detect — default
 
-Official layout documentation:
+The source is authoritative when it explicitly contains a supported layout:
 
-- https://mermaid.ai/open-source/config/layouts.html
-
-The external packages are loaded only when their layout is selected. They are reproducibly bundled as single files and registered using Mermaid's `registerLayoutLoaders()` API.
-
-### Pinned layout packages
-
-The static renderer currently pins:
-
-```text
-@mermaid-js/layout-elk       0.2.1
-@mermaid-js/layout-tidy-tree 0.2.2
+```yaml
+---
+config:
+  layout: dagre
+---
 ```
 
-Mermaid itself remains selectable in the UI and defaults to `11.15.0`. The trusted-version dropdown also includes the locally bundled `11.17.2` release, while a custom option accepts other complete semantic versions.
-
-This separation is intentional: Mermaid and its optional layout packages have independent release versions.
-
-## Render lifecycle
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as Parent app
-    participant I as Integrity layer
-    participant F as Renderer iframe
-    participant M as Mermaid
-
-    U->>A: Edit source / select layout
-    A->>A: Validate source + settings
-
-    alt Source is blank
-        A->>F: clear
-        F-->>A: cleared
-    else Source contains Mermaid
-        A->>I: Resolve complete executable stack
-        I->>I: Fetch + SHA-384 check, or require consent
-        I->>F: Executable bytes + integrity context
-        F->>F: Repeat known digest checks
-        A->>F: render(source, layout, theme)
-        F->>M: Execute runtime if permitted
-        F->>M: Register optional layout if required
-        F->>M: initialize + render
-        M-->>F: SVG
-        F-->>A: rendered(height, layout, package)
-        A->>A: Resize + fit viewport
-    end
-```
-
-## Trust decision flow
+Resolution flow:
 
 ```mermaid
 flowchart TD
-    INPUT["User selects Mermaid version and layout"]
-    KNOWN{"Complete trusted integrity record exists?"}
-    FETCH["Fetch executable artefacts"]
-    HASH["Calculate SHA-384 digests"]
-    MATCH{"Every digest matches?"}
-    CONSENT{"User explicitly accepts unverified execution?"}
-    LOAD["Pass bytes to sandbox; re-check known hashes; execute"]
-    BLOCK["Block execution"]
-    CANCEL["Do not download or execute"]
+    SOURCE[Mermaid source]
+    MODE{Auto-detect?}
+    FRONT{config.layout present?}
+    SUPPORTED{Supported layout?}
+    DETECTED[Use source layout]
+    FALLBACK[Use ELK fallback]
+    BLOCK[Block and report unsupported layout]
+    FORCE[Create render-only copy with selected layout]
+    RENDER[Render]
 
-    INPUT --> KNOWN
-    KNOWN -->|Yes| FETCH
-    FETCH --> HASH
-    HASH --> MATCH
-    MATCH -->|Yes| LOAD
-    MATCH -->|No| BLOCK
-    KNOWN -->|No| CONSENT
-    CONSENT -->|Yes| FETCH
-    CONSENT -->|No| CANCEL
+    SOURCE --> MODE
+    MODE -->|Yes| FRONT
+    FRONT -->|No| FALLBACK
+    FRONT -->|Yes| SUPPORTED
+    SUPPORTED -->|Yes| DETECTED
+    SUPPORTED -->|No| BLOCK
+    MODE -->|No| FORCE
+    DETECTED --> RENDER
+    FALLBACK --> RENDER
+    FORCE --> RENDER
 ```
 
-There are three externally visible outcomes:
+The resolver recognises:
 
-- **Verified:** every executable in the selected stack has an expected digest and matches it.
-- **Unverified:** integrity metadata was absent and the user explicitly approved that exact Mermaid version for the current selection or stored a remembered browser approval.
-- **Failed:** a known digest did not match; execution is blocked with no override.
+```yaml
+config:
+  layout: elk
+```
 
-## Artefact and CDN behaviour
+and the legacy flowchart-specific hints:
 
-Both trusted Mermaid versions and both optional layouts use committed, single-file bundles. `scripts/vendor-externals.mjs` copies each pinned Mermaid browser build, bundles each optional layout and writes SHA-384 digests into the manifest. `package-lock.json` pins registry integrity, and `npm run vendor:check` independently rebuilds and compares every output in CI.
+```yaml
+config:
+  flowchart:
+    defaultRenderer: dagre-wrapper
+```
 
-This single-file approach was selected because Mermaid's ESM entry imports many executable chunks. Hashing only that entry would not authenticate the code that ultimately executes.
+Legacy `dagre-wrapper` maps to `dagre`; legacy `elk` maps to `elk`. If both modern `config.layout` and a legacy flowchart hint are present, the modern layout directive takes precedence.
 
-For an unknown Mermaid version, and only after current or remembered version-specific consent, the parent tries:
+### Forced mode
 
-1. jsDelivr
-2. unpkg as a fallback
+Choosing a layout manually switches the viewer to forced mode.
 
-The requested version must first pass strict semantic-version validation, and it is URL-encoded into fixed URL templates. `latest`, paths, query strings and script fragments are rejected. No Mermaid source is sent to either CDN; only executable JavaScript is downloaded. A fallback source does not make an unknown version verified.
+Mermaid frontmatter has enough authority to override host initialisation, so forcing a layout cannot be implemented reliably by only changing `mermaid.initialize()`. Instead, the parent creates an **in-memory render copy** of the source and ensures that copy contains the selected `config.layout`.
 
-## Security boundaries
+For example, the editor may contain:
 
-### Parent page CSP
+```yaml
+---
+config:
+  layout: dagre
+---
+```
 
-`public/index.html` uses a restrictive Content Security Policy. Scripts, styles, frames and images are restricted to the static application's own origin. `connect-src` additionally lists only jsDelivr and unpkg for explicitly approved unknown-version downloads.
+while forced ELK internally renders:
 
-The renderer has its own CSP. Its opaque sandbox origin means `'self'` cannot reliably authorize the bootstrap files, so the static script tags carry a CSP nonce. `strict-dynamic` and `blob:` permit that bootstrap to execute the already-fetched bytes. The static nonce is an explicit execution allow-list, not a server-generated injection defence. `script-src` permits neither `unsafe-eval` nor `unsafe-inline`.
+```yaml
+---
+config:
+  layout: elk
+---
+```
 
-Mermaid emits diagram-specific SVG `<style>` elements and style attributes, so the renderer's `style-src` must permit inline CSS. Without that narrowly scoped exception, browsers discard Mermaid's theme rules and render nodes using incorrect black SVG defaults. The exception is contained inside the opaque-origin sandbox and does not relax script execution.
+The textarea is never changed. Copying or committing the editor text therefore preserves exactly what the user supplied.
 
-### Sandboxed execution
+### Frontmatter parser scope
 
-Untrusted Mermaid source is rendered inside the sandboxed iframe rather than directly in the parent DOM.
+The project deliberately does **not** add a general YAML parser for this feature. The layout detector is a narrow parser supporting the forms Mermaid Viewer needs:
 
-### Message validation
+- block `config.layout`;
+- inline `config: { ..., layout: ... }`;
+- quoted scalar layout values;
+- trailing YAML comments; and
+- legacy `config.flowchart.defaultRenderer`.
 
-The random renderer channel reduces the chance of unrelated window messages being accepted as renderer responses.
+Unsupported or malformed layout directives fail visibly rather than being silently normalised to another engine.
 
-### Mermaid strict mode
+## Layout engines
 
-Mermaid is initialised with `securityLevel: "strict"` to reduce unsafe HTML/link behaviour inside diagrams.
+| Layout | Purpose | Loading model |
+| --- | --- | --- |
+| `elk` | Layered/orthogonal architecture diagrams | Verified external `@mermaid-js/layout-elk` bundle |
+| `tidy-tree` | Hierarchical/tree layouts | Verified external `@mermaid-js/layout-tidy-tree` bundle |
+| `cose-bilkent` | Force-directed layouts | Built into the full Mermaid browser bundle |
+| `dagre` | Layered flowcharts | Built into Mermaid |
+
+ELK remains the viewer fallback in Auto-detect mode when the source is silent.
+
+## Source preservation
+
+A core v1.3 invariant is:
+
+> The viewer may transform an internal render copy, but it does not silently rewrite user Mermaid source.
+
+This matters when the diagram is eventually copied to GitHub or another documentation platform. Auto-detect shows what the **source itself requests**. Forced mode is explicitly a local comparison tool.
+
+## Persistence and migration
+
+The parent stores:
+
+```text
+mermaid-viewer-layout
+mermaid-viewer-layout-mode
+```
+
+New users default to `layout-mode = auto`.
+
+A browser profile upgraded from v1.2 may already contain a saved layout but no saved mode. v1.3 interprets that state as `forced` so the upgrade does not unexpectedly alter an existing user's previews.
+
+## Integrity model
+
+The executable trust model introduced in v1.2 remains unchanged:
+
+1. trusted Mermaid/layout artefacts have repository-controlled SHA-384 metadata;
+2. the parent fetches and verifies them;
+3. the sandbox repeats the known digest check before execution;
+4. unknown Mermaid versions require explicit version-scoped consent; and
+5. a known digest mismatch is blocked without bypass.
+
+Auto-detection affects only which already-supported layout stack is selected; it does not bypass integrity coverage.
 
 ## Static deployment
 
-GitHub Pages publishes only:
+GitHub Pages publishes only `public/`. No backend is required.
 
-```text
-public/
-```
-
-The deployment workflow:
-
-1. checks out the repository;
-2. installs exact dependencies, reproduces trusted artefacts, and runs the Node.js tests;
-3. configures GitHub Pages;
-4. uploads `public/` as the Pages artifact; and
-5. deploys it to the `github-pages` environment.
-
-There is no production Node.js server and no server-side state.
-
-## Repository structure
-
-```text
-.
-├── .github/
-│   ├── dependabot.yml
-│   └── workflows/
-│       ├── ci.yml
-│       └── pages.yml
-├── public/
-│   ├── .nojekyll
-│   ├── index.html
-│   ├── renderer.html
-│   └── assets/
-│       ├── css/
-│       │   └── app.css
-│       ├── js/
-│       │   ├── app.js
-│       │   ├── core.js
-│       │   ├── integrity.js
-│       │   ├── protocol.js
-│       │   ├── renderer.js
-│       │   └── externals/
-│       └── images/
-│           └── github-mark.svg
-├── tests/
-│   ├── core.test.js
-│   ├── integrity.test.js
-│   ├── protocol.test.js
-│   └── static-site.test.js
-├── ARCHITECTURE.md
-├── LICENSE
-├── README.md
-├── SECURITY.md
-└── package.json
-```
+The existing CI and Pages workflows continue to run `npm run check`, which verifies reproducible vendored artefacts and runs the Node test suite before deployment.
 
 ## Design constraints
 
-- **Static-first:** no backend is required.
-- **ELK-first:** ELK remains the default, while all supported layouts can be compared quickly.
-- **Source preservation:** changing layout does not rewrite the user's Mermaid source.
-- **Isolation:** rendering remains outside the parent document's origin privileges.
-- **Version visibility:** the Mermaid runtime version is explicit and editable.
-- **Fail visibly:** layout/runtime errors are surfaced in the UI rather than silently falling back to a different layout.
+- **Static-first:** no application server.
+- **Auto-aware:** explicit source layout wins in Auto-detect mode.
+- **ELK fallback:** source without a layout still renders with ELK.
+- **Source-preserving:** forced previewing never silently alters editor content.
+- **Fail visibly:** unsupported source layouts are reported rather than silently changed.
+- **Sandboxed:** Mermaid execution stays outside the parent's origin privileges.
+- **Integrity-aware:** layout selection does not bypass executable verification.
